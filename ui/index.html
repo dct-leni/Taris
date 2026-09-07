@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>Taris - Modern Homelab & SSH Studio</title>
+  <link rel="stylesheet" href="libs/xterm.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body data-theme="one_dark">
+  <div id="app-window">
+    <!-- ── 1. Top 30px Hardware DWM Window Titlebar ── -->
+    <header id="titlebar">
+      <div class="titlebar-brand">
+        <span class="brand-vortex" title="Taris Homelab & SSH Studio">
+          <svg class="brand-vortex-svg" viewBox="0 0 384 512">
+            <path fill="currentColor" d="M0 208C0 104.4 75.7 18.5 174.9 2.6C184 1.2 192 8.4 192 17.6l0 78.4c0 8.8-7.2 16-16 16c-53 0-96 43-96 96c0 14.5 3.2 28.2 9 40.5c3.8 8.1 1.7 17.8-5.3 23.3L27.6 317.9C10.2 286.3 0 248.4 0 208zm384 96c0 103.6-75.7 189.5-174.9 205.4C200 510.8 192 503.6 192 494.4l0-78.4c0-8.8 7.2-16 16-16c53 0 96-43 96-96c0-14.5-3.2-28.2-9-40.5c-3.8-8.1-1.7-17.8 5.3-23.3l56.1-46.5c17.4 31.6 27.6 69.5 27.6 109.9z"/>
+          </svg>
+        </span>
+        <span class="brand-name">Taris</span>
+      </div>
+
+      <!-- Flush Windows 11 Caption Buttons -->
+      <div class="caption-buttons">
+        <button id="btn-minimize" class="caption-btn" title="Minimize">
+          <svg class="caption-icon-svg" viewBox="0 0 10 10">
+            <line x1="0" y1="5" x2="10" y2="5" />
+          </svg>
+        </button>
+        <button id="btn-maximize" class="caption-btn" title="Maximize">
+          <svg class="caption-icon-svg" viewBox="0 0 10 10">
+            <rect x="0.5" y="0.5" width="9" height="9" />
+          </svg>
+        </button>
+        <button id="btn-close" class="caption-btn close" title="Close">
+          <svg class="caption-icon-svg" viewBox="0 0 10 10">
+            <line x1="0.5" y1="0.5" x2="9.5" y2="9.5" />
+            <line x1="0.5" y1="9.5" x2="9.5" y2="0.5" />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ── 2. Main Studio Workspace ── -->
+    <main id="main-workspace">
+      <!-- Left Activity Rail -->
+      <nav id="activity-rail">
+        <button class="rail-btn active" id="rail-btn-hosts" data-tab="hosts" title="Hosts (Homelab)"><i class="fa">&#xf233;</i></button>
+        <button class="rail-btn" id="rail-btn-cloud" data-tab="cloud" title="Cloud Providers (GCP, AWS, Azure)"><i class="fa">&#xf0c2;</i></button>
+        <button class="rail-btn" id="rail-btn-files" data-tab="files" title="Files (Local & Remote SFTP Explorer)"><i class="fa">&#xf07b;</i></button>
+        <button class="rail-btn" id="rail-btn-snippets" data-tab="snippets" title="Notes & Aliases (Double-click: Paste, Right-click: Copy)"><i class="fa">&#xf249;</i></button>
+        <button class="rail-btn disabled" id="rail-btn-docker" data-tab="docker" title="Docker Containers (Active only when connected to remote host with Docker)"><i class="fa">&#xf1b2;</i></button>
+        <button class="rail-btn" id="rail-btn-ports" data-tab="ports" title="Port & Socket Inspector"><i class="fa">&#xf796;</i></button>
+        <button class="rail-btn" id="rail-btn-tunnels" data-tab="tunnels" title="Port Forwarding (Tunnels)"><i class="fa">&#xf0ec;</i></button>
+        <button class="rail-btn" id="rail-btn-wireguard" data-tab="wireguard" title="WireGuard & Mesh"><i class="fa">&#xf3ed;</i></button>
+        
+        <div class="rail-spacer"></div>
+        <button class="rail-btn" id="rail-btn-logs" data-tab="logs" title="App Logs & Diagnostics" style="display: none;"><i class="fa">&#xf188;</i></button>
+        <button class="rail-btn" id="rail-btn-settings" data-tab="settings" title="Settings & Preferences"><i class="fa">&#xf013;</i></button>
+      </nav>
+
+      <!-- Collapsible Left Drawer -->
+      <aside id="left-drawer">
+        <div class="drawer-header">
+          <span id="drawer-title">HOSTS</span>
+          <div class="drawer-header-actions" style="display: flex; align-items: center; gap: 10px;">
+            <label class="ip-toggle-switch" id="ip-toggle-wrapper" title="Show or hide host IP addresses">
+              <input type="checkbox" id="toggle-host-ip">
+              <span class="ip-toggle-slider"></span>
+              <span class="ip-toggle-text">IP</span>
+            </label>
+            <span id="btn-open-add-host" style="color: var(--accent); cursor: pointer;"><i class="fa">&#xf067;</i> Add</span>
+            <span id="btn-open-add-snippet" style="color: var(--accent); cursor: pointer; display: none;"><i class="fa">&#xf067;</i> Add</span>
+          </div>
+        </div>
+        <div class="drawer-search" id="drawer-search-box">
+          <input type="text" id="drawer-search-input" class="search-input" placeholder="Filter hosts...">
+        </div>
+        <div id="drawer-items" class="drawer-content">
+          <!-- Populated from config.toml -->
+        </div>
+
+        <!-- Real Local & Remote SFTP File Explorer View -->
+        <div id="drawer-files" class="drawer-content hidden" style="display: none; flex-direction: column; padding: 0; overflow: hidden;">
+          <!-- SFTP Path Navigation Bar -->
+          <div class="sftp-nav-bar" style="padding: 6px 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+            <button id="sftp-up-btn" class="sftp-nav-btn" title="Go up to parent folder"><i class="fa">&#xf062;</i></button>
+            <input type="text" id="sftp-current-path" class="sftp-path-input" value="." title="Current path — Click to edit, Enter to navigate" spellcheck="false" autocomplete="off">
+            <span id="sftp-refresh-btn" class="sftp-nav-btn" style="cursor: pointer;" title="Refresh"><i class="fa">&#xf021;</i></span>
+          </div>
+          <div class="drawer-search" style="padding: 6px 8px; flex-shrink: 0;">
+            <input type="text" id="sftp-search-input" class="search-input" placeholder="Filter files...">
+          </div>
+          <div class="sftp-col-header" id="sftp-col-header" style="flex-shrink: 0;" title="Right-click header to customize columns">
+            <span class="col-name">Name</span>
+            <div class="col-resizer" id="resizer-col-name" title="Drag to resize Name"></div>
+            <span class="col-date">Modified</span>
+            <div class="col-resizer" id="resizer-col-date" title="Drag to resize Modified"></div>
+            <span class="col-size">Size</span>
+            <div class="col-resizer" id="resizer-col-size" title="Drag to resize Size"></div>
+            <span class="col-type">Type</span>
+            <div class="col-resizer" id="resizer-col-type" title="Drag to resize Type"></div>
+            <span class="col-perms">Perms</span>
+            <div class="col-resizer" id="resizer-col-perms" title="Drag to resize Perms"></div>
+          </div>
+          <div id="sftp-file-list" class="drawer-content" style="flex: 1; overflow-y: auto; padding: 2px 4px;">
+            <!-- Populated by real disk files -->
+          </div>
+        </div>
+
+        <!-- Notes & Aliases Snippets View -->
+        <div id="drawer-snippets" class="drawer-content hidden">
+          <!-- Populated from config.toml snippets -->
+        </div>
+
+        <!-- Docker / Podman Containers View -->
+        <div id="drawer-docker" class="drawer-content hidden">
+          <!-- Rendered Docker container cards -->
+        </div>
+
+        <!-- Real-Time Port & Socket Inspector View -->
+        <div id="drawer-ports" class="drawer-content hidden">
+          <!-- Rendered Port & Socket inspection -->
+        </div>
+
+        <!-- Port Forwarding (SSH Tunnels) View -->
+        <div id="drawer-tunnels" class="drawer-content hidden">
+          <div class="docker-toolbar">
+            <div class="docker-target-badge">
+              <i class="fa">&#xf0ec;</i>
+              <span>SSH Tunnels</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span id="tunnels-count" style="font-size: 10px; color: var(--text-subtle);">0 Active</span>
+              <button class="docker-refresh-btn" id="tunnel-add-btn" title="Add Port Forwarding Tunnel"><i class="fa">&#xf067;</i></button>
+              <button class="docker-refresh-btn" id="tunnels-refresh-btn" title="Refresh tunnels"><i class="fa">&#xf021;</i></button>
+            </div>
+          </div>
+          <div class="drawer-search" style="padding: 0; margin-bottom: 2px;">
+            <input type="text" id="tunnels-search-input" class="search-input" placeholder="Filter tunnels...">
+          </div>
+          <div id="tunnels-cards-list" style="display: flex; flex-direction: column; gap: 6px; flex: 1; overflow-y: auto;">
+            <!-- Populated from config.toml tunnels -->
+          </div>
+        </div>
+
+        <!-- Cloud Providers Drawer (GCP, AWS, Azure Compute Instances) -->
+        <div id="drawer-cloud" class="drawer-content hidden" style="display: none; flex-direction: column; padding: 0; overflow: hidden; height: 100%;">
+          <div class="docker-toolbar">
+            <div style="display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;">
+              <i class="fa" style="color: #61afef; font-size: 13px; margin-left: 2px;">&#xf0c2;</i>
+              <select id="cloud-provider-select" class="modal-input modal-select" style="font-size: 11px; padding: 2px 6px; height: 24px; background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 4px; flex: 1; min-width: 0;">
+                <option value="gcp">Google Cloud (GCP)</option>
+                <option value="aws">Amazon Web Services (AWS)</option>
+                <option value="azure">Microsoft Azure</option>
+              </select>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <button class="docker-refresh-btn" id="cloud-settings-btn" title="Cloud Provider Authentication & Settings"><i class="fa">&#xf013;</i></button>
+              <button class="docker-refresh-btn" id="cloud-refresh-btn" title="Refresh projects and instances"><i class="fa">&#xf021;</i></button>
+            </div>
+          </div>
+          <div class="drawer-search" style="padding: 0 8px 4px 8px;">
+            <input type="text" id="cloud-search-input" class="search-input" placeholder="Filter projects or instances...">
+          </div>
+          <div id="cloud-auth-notice" style="padding: 4px 8px; font-size: 10.5px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-color); background: var(--bg-card);">
+            <span style="color: var(--text-subtle); font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">Status</span>
+            <span id="cloud-auth-pill" class="status-pill offline">Not connected</span>
+          </div>
+          <div id="cloud-tree-list" style="display: flex; flex-direction: column; gap: 8px; flex: 1; overflow-y: auto; padding: 6px 8px;">
+            <!-- Populated dynamically in memory with projects and instances -->
+          </div>
+        </div>
+
+        <!-- Mesh VPN Networks Drawer (Unified WireGuard, Tailscale, NetBird) -->
+        <div id="drawer-wireguard" class="drawer-content hidden" style="display: none; flex-direction: column; padding: 0; overflow: hidden; height: 100%;">
+          <div class="docker-toolbar">
+            <div class="docker-target-badge">
+              <i class="fa" style="color: #98c379;">&#xf3ed;</i>
+              <span>Mesh VPN</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span id="mesh-active-pill" class="status-pill" style="font-size: 10px;">Disconnected</span>
+              <button class="docker-refresh-btn" id="mesh-add-btn" title="Add Mesh VPN Network (WireGuard, Tailscale, NetBird)"><i class="fa">&#xf067;</i></button>
+              <button class="docker-refresh-btn" id="mesh-refresh-btn" title="Refresh network statuses"><i class="fa">&#xf021;</i></button>
+            </div>
+          </div>
+          <div class="drawer-search" style="padding: 0 8px 4px 8px;">
+            <input type="text" id="mesh-search-input" class="search-input" placeholder="Filter networks...">
+          </div>
+          <div id="mesh-cards-list" style="display: flex; flex-direction: column; gap: 6px; flex: 1; overflow-y: auto; padding: 6px 8px;">
+            <!-- Populated dynamically with WireGuard, Tailscale, NetBird networks -->
+          </div>
+        </div>
+
+        <!-- App Logs & Diagnostics Drawer -->
+        <div id="drawer-logs" class="drawer-content hidden" style="display: none; flex-direction: column; padding: 0; overflow: hidden; height: 100%;">
+          <div class="docker-toolbar">
+            <div class="docker-target-badge">
+              <i class="fa" style="color: #e5c07b;">&#xf188;</i>
+              <span>App Logs</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span id="logs-count-badge" class="status-pill" style="font-size: 10px;">0 logs</span>
+              <button class="docker-refresh-btn" id="logs-copy-btn" title="Copy visible logs to clipboard"><i class="fa">&#xf0c5;</i></button>
+              <button class="docker-refresh-btn" id="logs-export-btn" title="Export logs as text file"><i class="fa">&#xf019;</i></button>
+              <button class="docker-refresh-btn" id="logs-clear-btn" title="Clear log buffer"><i class="fa">&#xf1f8;</i></button>
+              <button class="docker-refresh-btn" id="logs-refresh-btn" title="Refresh logs"><i class="fa">&#xf021;</i></button>
+            </div>
+          </div>
+          <div class="logs-filter-toolbar" style="padding: 4px 8px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--border-color); background: var(--bg-card); flex-shrink: 0;">
+            <select id="logs-level-filter" class="modal-input modal-select" style="font-size: 11px; padding: 2px 6px; height: 24px; background: var(--bg-main); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 4px; width: 85px;">
+              <option value="ALL">All Levels</option>
+              <option value="ERROR">Error</option>
+              <option value="WARN">Warn</option>
+              <option value="INFO">Info</option>
+              <option value="DEBUG">Debug</option>
+            </select>
+            <input type="text" id="logs-search-input" class="search-input" placeholder="Filter logs..." style="flex: 1; height: 24px; font-size: 11px;">
+            <label style="display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text-subtle); cursor: pointer; user-select: none;" title="Automatically scroll to newest entry">
+              <input type="checkbox" id="logs-autoscroll" checked style="cursor: pointer;"> Auto
+            </label>
+          </div>
+          <div id="logs-entries-list" class="logs-entries-container" style="flex: 1; overflow-y: auto; padding: 4px 6px; font-family: var(--font-mono, 'Cascadia Code', monospace); font-size: 11px; line-height: 1.4;">
+            <!-- Populated dynamically with log entries -->
+          </div>
+        </div>
+
+        <!-- Settings view taking whole left section -->
+        <div id="drawer-settings" class="hidden">
+          <!-- Section 1: Theme -->
+          <div class="drawer-settings-section">
+            <div class="drawer-settings-title"><i class="fa">&#xf53f;</i> Theme</div>
+            <div class="drawer-settings-row">
+              <label for="setting-theme">App theme:</label>
+              <select id="setting-theme" class="drawer-settings-select">
+                <option value="one_dark">One Dark Pro</option>
+                <option value="tokyo_night">Tokyo Night</option>
+                <option value="dracula">Dracula</option>
+                <option value="catppuccin">Catppuccin Mocha</option>
+                <option value="nord">Nord Arctic</option>
+                <option value="monokai_pro">Monokai Pro</option>
+                <option value="solarized_dark">Solarized Dark</option>
+                <option value="gruvbox_dark">Gruvbox Dark</option>
+                <option value="synthwave">Synthwave '84</option>
+                <option value="alacritty_dark">Alacritty Dark</option>
+              </select>
+            </div>
+            <div class="drawer-settings-row">
+              <label for="setting-app-font-size">App font size:</label>
+              <select id="setting-app-font-size" class="drawer-settings-select">
+                <option value="11">11px (Compact)</option>
+                <option value="12">12px (Small)</option>
+                <option value="13" selected>13px (Default)</option>
+                <option value="14">14px (Medium)</option>
+                <option value="15">15px (Large)</option>
+                <option value="16">16px (Extra Large)</option>
+              </select>
+            </div>
+            <div class="drawer-settings-row">
+              <label for="setting-font-family">Font family:</label>
+              <select id="setting-font-family" class="drawer-settings-select">
+                <option value="Cascadia Code">Cascadia Code</option>
+                <option value="Fira Code">Fira Code</option>
+                <option value="Consolas">Consolas</option>
+                <option value="Segoe UI">Segoe UI</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Section 2: Terminal options -->
+          <div class="drawer-settings-section">
+            <div class="drawer-settings-title"><i class="fa">&#xf120;</i> Terminal options</div>
+            <div class="drawer-settings-row">
+              <label for="setting-terminal-theme">Terminal color scheme:</label>
+              <select id="setting-terminal-theme" class="drawer-settings-select">
+                <option value="one_dark">One Dark Pro</option>
+                <option value="tokyo_night">Tokyo Night</option>
+                <option value="dracula">Dracula</option>
+                <option value="catppuccin">Catppuccin Mocha</option>
+                <option value="nord">Nord Arctic</option>
+                <option value="monokai_pro">Monokai Pro</option>
+                <option value="solarized_dark">Solarized Dark</option>
+                <option value="gruvbox_dark">Gruvbox Dark</option>
+                <option value="synthwave">Synthwave '84</option>
+                <option value="alacritty_dark">Alacritty Dark</option>
+              </select>
+            </div>
+            <div class="drawer-settings-row" style="margin-top: 6px;">
+              <input type="file" id="input-palette-file" accept=".itermcolors,.json,.plist" style="display: none;">
+              <button type="button" id="btn-import-palette" class="btn-secondary" style="width: 100%; justify-content: center; height: 26px; font-size: 11px;" title="Import iTerm2 (.itermcolors) or Termius JSON palette for terminal">
+                <i class="fa">&#xf093;</i> Import palette (.itermcolors / JSON)
+              </button>
+            </div>
+            <div class="drawer-settings-row">
+              <label for="setting-terminal-font-size">Terminal font size:</label>
+              <select id="setting-terminal-font-size" class="drawer-settings-select">
+                <option value="11">11px</option>
+                <option value="12">12px</option>
+                <option value="13">13px</option>
+                <option value="14" selected>14px (Default)</option>
+                <option value="15">15px</option>
+                <option value="16">16px</option>
+                <option value="18">18px</option>
+                <option value="20">20px</option>
+              </select>
+            </div>
+            <div class="drawer-settings-row">
+              <label for="setting-cursor-style">Cursor style:</label>
+              <select id="setting-cursor-style" class="drawer-settings-select">
+                <option value="block">Block</option>
+                <option value="underline">Underline</option>
+                <option value="bar">Bar</option>
+              </select>
+            </div>
+            <div class="drawer-settings-row">
+              <label for="setting-scrollback">Scrollback lines:</label>
+              <input type="number" id="setting-scrollback" class="drawer-settings-select mono" value="10000" min="1000" max="100000" step="1000" style="width: 100%; padding: 0 8px;">
+            </div>
+            <div class="drawer-settings-row">
+              <label for="setting-external-editor">External editor:</label>
+              <select id="setting-external-editor" class="drawer-settings-select">
+                <option value="auto">Auto-detect</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Section 3: Shell & daemon -->
+          <div class="drawer-settings-section">
+            <div class="drawer-settings-title"><i class="fa">&#xf120;</i> Shell & daemon</div>
+            <div class="drawer-settings-row">
+              <label for="setting-default-shell">Default shell:</label>
+              <select id="setting-default-shell" class="drawer-settings-select">
+                <option value="powershell">PowerShell</option>
+                <option value="cmd">Command Prompt</option>
+                <option value="git-bash">Git Bash</option>
+              </select>
+            </div>
+            <div class="drawer-settings-row">
+              <label for="setting-docker-port">Docker/Podman port:</label>
+              <input type="number" id="setting-docker-port" class="drawer-settings-select mono" value="2375" min="1" max="65535" style="width: 100%; padding: 0 8px;">
+            </div>
+
+            <div class="drawer-settings-row checkbox-row" style="margin-top: 6px;">
+              <input type="checkbox" id="setting-enable-ssh-compression">
+              <label for="setting-enable-ssh-compression" title="Enables zlib compression (-C). Beneficial over high-latency/metered mobile connections; not needed on fast local networks.">Enable Terminal SSH Compression (-C)</label>
+            </div>
+
+            <div class="drawer-settings-row checkbox-row" style="margin-top: 6px;">
+              <input type="checkbox" id="setting-enable-app-logs">
+              <label for="setting-enable-app-logs" title="Enables App Logs menu on the left rail. Collects all Rust backend and Tauri webview errors/warnings for easy debugging.">Enable App Logs & Diagnostics</label>
+            </div>
+          </div>
+
+          <!-- Section 4: Left menu order -->
+          <div class="drawer-settings-section">
+            <div class="drawer-settings-title" style="display: flex; justify-content: space-between; align-items: center;">
+              <span><i class="fa">&#xf0c9;</i> Left menu order</span>
+              <button type="button" id="btn-reset-rail-order" class="btn-secondary" style="font-size: 10px; padding: 2px 7px; height: 20px;" title="Reset left menu to default order">Reset</button>
+            </div>
+            <div id="settings-rail-order-list" class="rail-order-settings-list">
+              <!-- Populated dynamically with current rail order -->
+            </div>
+          </div>
+
+          <!-- Section 5: Storage footprint -->
+          <div class="drawer-settings-section">
+            <div class="drawer-settings-title"><i class="fa">&#xf07c;</i> Storage footprint</div>
+            <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.6;">
+              Config: <span class="mono" style="color: var(--text-bright);">./config.toml</span><br>
+              Keys: <span class="mono" style="color: var(--text-bright);">./.ssh/</span>
+            </div>
+          </div>
+
+          <!-- Save Button -->
+          <div style="margin-top: 4px; display: flex; flex-direction: column; gap: 6px;">
+            <button id="btn-save-settings" class="btn-primary" style="width: 100%; justify-content: center; height: 32px;"><i class="fa">&#xf0c7;</i> Save Preferences</button>
+            <span id="save-status-msg" style="color: var(--green); font-size: 11.5px; text-align: center; display: none;"><i class="fa">&#xf00c;</i> Saved to ./config.toml</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Left Draggable Splitter Resizer -->
+      <div id="left-resizer" class="resizer" title="Drag to resize drawer"></div>
+
+      <!-- Central Studio Workspace -->
+      <section id="center-workspace">
+        <!-- Authentic IDE Tab Strip (Reorderable & Closable) -->
+        <div id="tab-strip">
+          <div class="tab-card active" data-view="local" draggable="true">
+            <i class="fa">&#xf120;</i>
+            <span class="tab-title">Local (PowerShell)</span>
+            <span class="tab-close">✕</span>
+          </div>
+          <button id="add-tab-btn" title="New Terminal Tab">+</button>
+        </div>
+
+        <!-- View 1: Local Terminal (Real PTY xterm.js) -->
+        <div id="local-term-pane" class="view-pane active">
+          <div id="terminal-container-local" class="xterm-view-wrapper"></div>
+        </div>
+
+        <!-- View 2: Code Editor (Dynamically opened on file click) -->
+        <div id="editor-pane" class="view-pane">
+          <div class="editor-toolbar">
+            <div class="editor-breadcrumbs">
+              <span style="color: var(--accent);"><i class="fa">&#xf07b;</i> Editor</span>
+              <span style="color: var(--text-subtle);">›</span>
+              <span class="mono" style="color: var(--text-bright); font-weight: 500;" id="editor-file-title">No file open</span>
+              <span class="titlebar-divider">|</span>
+              <span id="editor-lang-badge" style="background: var(--bg-dock); border: 1px solid var(--border); padding: 1px 6px; border-radius: 3px; font-size: 10px; color: var(--accent); font-weight: 600;">TEXT</span>
+              <span class="titlebar-divider">|</span>
+              <span id="editor-status-text" style="color: var(--text-subtle); font-size: 11.5px;">Ready</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span id="editor-lines-count" style="color: var(--text-subtle); font-size: 11px;">0 lines</span>
+              <button class="editor-save-btn"><i class="fa">&#xf0c7;</i> Save</button>
+            </div>
+          </div>
+          <div class="editor-body">
+            <div id="editor-gutter" class="editor-gutter"></div>
+            <div class="editor-canvas">
+              <pre id="editor-highlight" aria-hidden="true" class="editor-pre"><code id="editor-code"></code></pre>
+              <textarea id="editor-textarea" class="editor-textarea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="Open a file from the file explorer to view and edit..."></textarea>
+            </div>
+          </div>
+        </div>
+
+        <!-- View 3: Database Viewer (Dynamically opened on db click) -->
+        <div id="db-pane" class="view-pane">
+          <div class="db-toolbar">
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+              <span style="color: var(--accent); font-weight: 600;"><i class="fa">&#xf1c0;</i> DATABASE VIEWER</span>
+              <span class="titlebar-divider">|</span>
+              <span id="db-active-file" class="mono" style="color: var(--text-bright); font-size: 12px;">No database selected</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span id="db-stats-badge" style="color: var(--text-subtle); font-size: 11px;"></span>
+            </div>
+          </div>
+
+          <div id="db-empty-state" style="padding: 60px 20px; text-align: center; color: var(--text-subtle); font-size: 13px;">
+            <i class="fa" style="font-size: 36px; margin-bottom: 14px; display: block; color: var(--text-muted);">&#xf1c0;</i>
+            Double-click any <span class="mono" style="color: var(--text-bright);">.db</span> or <span class="mono" style="color: var(--text-bright);">.sqlite</span> file in the File Explorer to inspect tables and run queries.
+          </div>
+
+          <div id="db-studio-container" class="db-studio-layout hidden">
+            <!-- Left Tables Sidebar -->
+            <div class="db-sidebar">
+              <div class="db-sidebar-header">
+                <span>TABLES (<span id="db-tables-count">0</span>)</span>
+                <span id="db-refresh-tables-btn" title="Refresh tables" style="cursor: pointer;"><i class="fa">&#xf021;</i></span>
+              </div>
+              <div id="db-tables-list" class="db-tables-list">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+
+            <!-- Right Query & Data Area -->
+            <div class="db-main-area">
+              <div class="db-query-bar">
+                <input type="text" id="db-query-input" class="search-input mono" placeholder="SELECT * FROM table LIMIT 100;" value="">
+                <button id="db-run-query-btn" class="btn-primary" style="height: 28px; padding: 0 12px; font-size: 11.5px;"><i class="fa">&#xf04b;</i> Run</button>
+              </div>
+              <div class="db-query-status">
+                <span id="db-query-timing" style="color: var(--text-subtle); font-size: 11px;">Ready</span>
+              </div>
+              <div id="db-grid-wrapper" class="db-grid">
+                <table id="db-data-table" class="data-table">
+                  <thead id="db-table-head"></thead>
+                  <tbody id="db-table-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+    </main>
+
+    <!-- ── 3. Bottom 22px Compact Status Bar ── -->
+    <footer id="statusbar">
+      <div class="status-left">
+        <span id="status-host-name" style="color: var(--text-bright);">Local Machine</span>
+        <span style="color: var(--text-subtle);">•</span>
+        <span id="status-latency" style="color: var(--accent); font-weight: 500;">PowerShell</span>
+        <span id="status-conn-badge" style="color: var(--text-muted); font-size: 11.5px;">(ConPTY)</span>
+
+        <!-- Active Transfer & Sync Widget -->
+        <div id="status-transfer-widget" class="status-transfer-widget hidden">
+          <span class="transfer-icon"><i class="fa fa-spin">&#xf110;</i></span>
+          <span id="status-transfer-text" class="transfer-text">Transferring...</span>
+          <div class="transfer-progress-track">
+            <div id="status-transfer-fill" class="transfer-progress-fill" style="width: 0%;"></div>
+          </div>
+          <span id="status-transfer-speed" class="transfer-speed">0.0 KB/s</span>
+        </div>
+      </div>
+
+      <div class="status-right">
+        <div class="stat-item"><span class="stat-label">CPU:</span><span id="footer-cpu" class="stat-val">--</span></div>
+        <span class="titlebar-divider">|</span>
+        <div class="stat-item"><span class="stat-label">RAM:</span><span id="footer-ram" class="stat-val">--</span></div>
+        <span class="titlebar-divider">|</span>
+        <div class="stat-item">
+          <span class="stat-label">Net:</span>
+          <div id="footer-net-box" class="status-net-box">
+            <span class="net-item"><span class="net-arrow">↑</span><span id="footer-net-tx" class="stat-val net-val">-- KB/s</span></span>
+            <span class="net-item"><span class="net-arrow">↓</span><span id="footer-net-rx" class="stat-val net-val">-- KB/s</span></span>
+          </div>
+        </div>
+        <span class="titlebar-divider">|</span>
+        <div class="stat-item" id="footer-ping-box">
+          <span class="stat-label">Ping:</span>
+          <span id="footer-ping-val" class="stat-val">--</span>
+        </div>
+      </div>
+    </footer>
+
+    <!-- Add Host Modal Dialog -->
+    <div id="modal-add-host" class="modal-overlay hidden">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <span><i class="fa" style="color: var(--accent);">&#xf233;</i> Add Remote Host</span>
+          <button id="modal-close-btn" class="modal-close-x">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="host-live-preview">
+            <span class="preview-badge">PREVIEW</span>
+            <div class="preview-inner">
+              <span class="online-dot"></span>
+              <i id="preview-icon-glyph" class="fa">&#xf233;</i>
+              <span id="preview-host-name">New Host</span>
+              <span id="preview-host-conn" class="mono">root@192.168.1.100:22</span>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Display Name</label>
+            <input type="text" id="host-form-name" class="modal-input" placeholder="e.g. My Server" value="">
+          </div>
+          <div class="form-row-2">
+            <div class="form-group" style="flex: 1;">
+              <label>Host / IP</label>
+              <input type="text" id="host-form-ip" class="modal-input" placeholder="192.168.1.100" value="">
+            </div>
+            <div class="form-group" style="width: 80px;">
+              <label>Port</label>
+              <input type="number" id="host-form-port" class="modal-input" value="22">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Username</label>
+            <input type="text" id="host-form-user" class="modal-input" value="root">
+          </div>
+          <div class="form-group">
+            <label>Authentication Type</label>
+            <div class="auth-radio-group">
+              <label><input type="radio" name="auth-type" value="key" checked> SSH Key</label>
+              <label><input type="radio" name="auth-type" value="password"> Password</label>
+            </div>
+          </div>
+          <div id="group-key-path" class="form-group">
+            <label>Key Path (relative to ./ or absolute)</label>
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <input type="text" id="host-form-key" class="modal-input" value=".ssh/id_ed25519" style="flex: 1;">
+              <button type="button" id="btn-browse-ssh-key" class="btn-secondary" style="height: 28px; padding: 0 10px; font-size: 11px; white-space: nowrap;" title="Browse for private key file">
+                <i class="fa">&#xf07c;</i> Browse...
+              </button>
+            </div>
+            <div id="key-perm-container" style="margin-top: 6px; font-size: 11.5px; display: none;">
+              <div id="key-perm-badge" style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-card);">
+                <span id="key-perm-text"><i class="fa">&#xf05a;</i> Checking permissions...</span>
+                <button type="button" id="btn-fix-key-perm" class="btn-primary" style="display: none; font-size: 10.5px; padding: 2px 8px; height: 22px; margin-left: 8px;">
+                  <i class="fa">&#xf0ad;</i> Fix permissions
+                </button>
+              </div>
+            </div>
+          </div>
+          <div id="group-password" class="form-group hidden">
+            <label>Password</label>
+            <input type="password" id="host-form-password" class="modal-input" placeholder="Enter remote password">
+          </div>
+          <div class="form-group">
+            <label>Host Icon (Font Awesome & Homelab Alternative)</label>
+            <div style="margin-bottom: 6px;">
+              <input type="text" id="fa-icon-search-input" class="search-input" placeholder="Filter 1,900+ icons (e.g. server, proxmox, debian, ubuntu, truenas, cloud, db)...">
+            </div>
+            <div class="icon-picker-grid" id="icon-picker-grid">
+              <!-- Dynamically populated from comprehensive 1,900+ icon catalog -->
+            </div>
+            <input type="hidden" id="host-form-icon" value="&#xf233;">
+            <input type="hidden" id="host-form-icon-svg" value="">
+          </div>
+          <div class="form-group checkbox-row">
+            <input type="checkbox" id="host-form-docker" checked>
+            <label for="host-form-docker">Enable Docker tab detection for this host</label>
+          </div>
+          <div class="form-group checkbox-row">
+            <input type="checkbox" id="host-form-port-scan" checked>
+            <label for="host-form-port-scan">Enable Port Scanner for this host</label>
+          </div>
+          <div class="form-group" style="margin-top: 8px;">
+            <label for="host-form-mac">MAC Address (for Wake-on-LAN)</label>
+            <input type="text" id="host-form-mac" class="modal-input" placeholder="e.g. 00:11:22:33:44:55">
+          </div>
+          <div class="form-group" style="margin-top: 8px;">
+            <label for="host-form-network-route"><i class="fa" style="color: var(--accent); margin-right: 4px;">&#xf3ed;</i> Network Route</label>
+            <select id="host-form-network-route" class="modal-input">
+              <option value="direct">Direct Connect (Standard)</option>
+              <option value="mesh">Mesh / VPN Network (Use active Mesh/VPN)</option>
+            </select>
+            <span style="font-size: 10.5px; color: var(--text-subtle); margin-top: 3px; display: block;">
+              Direct connects directly to the host IP. Mesh / VPN routes traffic through whichever Mesh or VPN network is active in Taris.
+            </span>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="modal-cancel-btn" class="btn-secondary">Cancel</button>
+          <button id="modal-submit-btn" class="btn-primary"><i class="fa">&#xf067;</i> Save Host</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add / Edit Snippet (Notes & Aliases) Modal -->
+    <div id="modal-add-snippet" class="modal-overlay hidden">
+      <div class="modal-dialog" style="max-width: 460px;">
+        <div class="modal-header">
+          <h3 id="modal-snippet-title">Add Note / Alias</h3>
+          <button type="button" id="modal-snippet-close" class="modal-close-x">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="snippet-form-title">Title / Name</label>
+            <input type="text" id="snippet-form-title" class="modal-input" placeholder="e.g. Docker PS, Restart Nginx, Disk Check">
+          </div>
+          <div class="form-group">
+            <label for="snippet-form-command">Command / Note</label>
+            <textarea id="snippet-form-command" class="modal-input mono" style="height: 80px; resize: vertical;" placeholder="e.g. docker ps -a"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="snippet-form-tags">Tag / Category (optional)</label>
+            <input type="text" id="snippet-form-tags" class="modal-input" placeholder="e.g. docker, system, logs">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="modal-snippet-cancel" class="btn-secondary">Cancel</button>
+          <button id="modal-snippet-submit" class="btn-primary"><i class="fa">&#xf067;</i> Save Snippet</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add / Edit Port Forwarding Tunnel Modal -->
+    <div id="modal-tunnel" class="modal-overlay hidden">
+      <div class="modal-dialog" style="max-width: 480px;">
+        <div class="modal-header">
+          <h3 id="modal-tunnel-title"><i class="fa" style="color: var(--accent); margin-right: 6px;">&#xf0ec;</i> Add Port Forwarding Tunnel</h3>
+          <button type="button" id="modal-tunnel-close" class="modal-close-x">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="tunnel-form-name">Tunnel Name</label>
+            <input type="text" id="tunnel-form-name" class="modal-input" placeholder="e.g. Postgres DB, Web Admin, Redis">
+          </div>
+          <div class="form-group">
+            <label for="tunnel-form-host">SSH Host (Forwarding Gateway)</label>
+            <select id="tunnel-form-host" class="modal-input modal-select">
+              <!-- Populated dynamically with configured hosts -->
+            </select>
+          </div>
+          <div class="form-row-2">
+            <div class="form-group" style="flex: 1;">
+              <label for="tunnel-form-local-port">Local Port (Listen on 127.0.0.1)</label>
+              <input type="number" id="tunnel-form-local-port" class="modal-input" min="1" max="65535" value="8080">
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label for="tunnel-form-remote-port">Remote Port</label>
+              <input type="number" id="tunnel-form-remote-port" class="modal-input" min="1" max="65535" value="80">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="tunnel-form-remote-host">Remote Target Host (Relative to SSH Host)</label>
+            <input type="text" id="tunnel-form-remote-host" class="modal-input" value="127.0.0.1" placeholder="127.0.0.1 or 192.168.1.x">
+          </div>
+          <div class="form-group checkbox-row">
+            <input type="checkbox" id="tunnel-form-autostart">
+            <label for="tunnel-form-autostart">Auto-start tunnel when app launches</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="modal-tunnel-cancel" class="btn-secondary">Cancel</button>
+          <button id="modal-tunnel-submit" class="btn-primary"><i class="fa">&#xf0ec;</i> Save Tunnel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add Mesh VPN Network Modal (Unified WireGuard, Tailscale, NetBird) -->
+    <div id="modal-add-mesh" class="modal-overlay hidden">
+      <div class="modal-dialog" style="max-width: 560px;">
+        <div class="modal-header">
+          <h3 id="modal-mesh-title"><i class="fa" style="color: #98c379; margin-right: 6px;">&#xf3ed;</i> Add Mesh VPN Network</h3>
+          <button type="button" id="modal-mesh-close" class="modal-close-x">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="mesh-form-type">Network / Mesh Type</label>
+            <select id="mesh-form-type" class="modal-input modal-select">
+              <option value="wireguard" selected>WireGuard (Custom Tunnel / .conf)</option>
+              <option value="tailscale">Tailscale (MagicDNS & Tailnet)</option>
+              <option value="netbird">NetBird (Zero-Trust Overlay Network)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="mesh-form-name">Profile / Network Name</label>
+            <input type="text" id="mesh-form-name" class="modal-input" placeholder="e.g. Homelab WireGuard, Office Tailnet, NetBird Cloud">
+          </div>
+
+          <!-- 1. WireGuard Dynamic Fields -->
+          <div id="mesh-fields-wireguard" class="mesh-type-fields">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <label for="wg-form-conf">WireGuard Configuration (.conf format, 10+ lines)</label>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <button id="wg-form-copy-btn" type="button" class="btn-compact" title="Copy configuration to clipboard">
+                  <i class="fa">&#xf0c5;</i> Copy Config
+                </button>
+                <button id="wg-form-browse-btn" type="button" class="btn-compact" title="Import WireGuard configuration file">
+                  <i class="fa">&#xf07b;</i> Import .conf
+                </button>
+              </div>
+            </div>
+            <div class="form-group">
+              <textarea id="wg-form-conf" class="modal-input mono" rows="12" style="min-height: 220px; resize: vertical; font-size: 11px; line-height: 1.45; white-space: pre; tab-size: 2;" placeholder="[Interface]
+PrivateKey = aaaaaa...
+Address = 10.0.0.2/32
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = bbbbbb...
+Endpoint = vpn.homelab.net:51820
+AllowedIPs = 10.0.0.0/24, 192.168.1.0/24
+PersistentKeepalive = 25"></textarea>
+            </div>
+          </div>
+
+          <!-- 2. Tailscale Dynamic Fields -->
+          <div id="mesh-fields-tailscale" class="mesh-type-fields hidden" style="display: none;">
+            <div class="form-group">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <label for="ts-form-auth-key" style="margin-bottom: 0;">Tailscale Auth / API Key</label>
+                <button type="button" class="btn-compact" id="btn-ts-browser-auth" title="Open Tailscale Keys page in browser">
+                  <i class="fa">&#xf08e;</i> Get Tailscale Key
+                </button>
+              </div>
+              <div class="password-input-group">
+                <input type="password" id="ts-form-auth-key" class="modal-input mono" placeholder="tskey-auth-... or tskey-api-...">
+                <div class="input-addons">
+                  <button type="button" class="btn-input-addon" id="btn-toggle-ts-key" title="Show / Hide Key">
+                    <i class="fa">&#xf06e;</i>
+                  </button>
+                </div>
+              </div>
+              <span style="font-size: 10.5px; color: var(--text-subtle); margin-top: 4px; display: block;">
+                Pure native connection — no external tailscale binary or daemon required.
+              </span>
+            </div>
+            <div class="form-group">
+              <label for="ts-form-control-url">Control URL (Headscale or custom server, optional)</label>
+              <input type="text" id="ts-form-control-url" class="modal-input" placeholder="https://controlplane.tailscale.com or https://headscale.lan">
+            </div>
+            <div class="form-group">
+              <label for="ts-form-hostname">Device Hostname / Node Name (optional)</label>
+              <input type="text" id="ts-form-hostname" class="modal-input" placeholder="taris-client">
+            </div>
+          </div>
+
+          <!-- 3. NetBird Dynamic Fields -->
+          <div id="mesh-fields-netbird" class="mesh-type-fields hidden" style="display: none;">
+            <div class="form-group">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <label for="nb-form-token" style="margin-bottom: 0;">Setup Key or Access Token</label>
+                <button type="button" class="btn-compact" id="btn-nb-browser-token" title="Open NetBird Dashboard to manage Keys and Tokens">
+                  <i class="fa">&#xf08e;</i> Get Key / Token
+                </button>
+              </div>
+              <div class="password-input-group">
+                <input type="password" id="nb-form-token" class="modal-input mono" placeholder="Setup Key (e.g. 3ED6B...) or Access Token (nbp_...)">
+                <div class="input-addons">
+                  <button type="button" class="btn-input-addon" id="btn-toggle-nb-key" title="Show / Hide Key">
+                    <i class="fa">&#xf06e;</i>
+                  </button>
+                </div>
+              </div>
+              <span style="font-size: 10.5px; color: var(--text-subtle); margin-top: 4px; display: block;">
+                Use a <b>Setup Key</b> (assigned to your network groups & permissions) or a <b>Personal Access Token (PAT)</b>.
+              </span>
+            </div>
+            <div class="form-group">
+              <label for="nb-form-mgmt-url">Management Server URL</label>
+              <input type="text" id="nb-form-mgmt-url" class="modal-input" value="https://api.netbird.io" placeholder="https://api.netbird.io">
+            </div>
+          </div>
+
+          <div class="form-group checkbox-row" style="margin-top: 10px;">
+            <input type="checkbox" id="mesh-form-autoconnect">
+            <label for="mesh-form-autoconnect">Auto-connect on Taris startup (Strictly one active connection enforced)</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="modal-mesh-cancel" class="btn-secondary">Cancel</button>
+          <button id="modal-mesh-submit" class="btn-primary"><i class="fa">&#xf0c7;</i> Save Network</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cloud Provider Authentication & Settings Modal -->
+    <div id="modal-cloud-settings" class="modal-overlay hidden">
+      <div class="modal-dialog" style="max-width: 580px;">
+        <div class="modal-header">
+          <h3 id="modal-cloud-settings-title"><i class="fa" style="color: #61afef; margin-right: 6px;">&#xf0c2;</i> Cloud Provider Settings & Authentication</h3>
+          <button type="button" id="modal-cloud-settings-close" class="modal-close-x">✕</button>
+        </div>
+        <div class="modal-body">
+          <!-- Cloud Provider Tabs -->
+          <div class="cloud-tab-nav">
+            <button type="button" class="cloud-tab-btn active" id="cloud-tab-btn-gcp" data-cloud="gcp">
+              <i class="fa" style="color: #4285f4;">&#xf1a0;</i> Google Cloud (GCP)
+            </button>
+            <button type="button" class="cloud-tab-btn" id="cloud-tab-btn-aws" data-cloud="aws">
+              <i class="fa" style="color: #ff9900;">&#xf270;</i> Amazon Web Services (AWS)
+            </button>
+            <button type="button" class="cloud-tab-btn" id="cloud-tab-btn-azure" data-cloud="azure">
+              <i class="fa" style="color: #0078d4;">&#xf17a;</i> Microsoft Azure
+            </button>
+          </div>
+
+          <!-- GCP Panel -->
+          <div id="cloud-panel-gcp" class="cloud-settings-panel active">
+            <div class="form-group">
+              <label for="cloud-gcp-sa-path">Service Account Key File Path</label>
+              <div style="display: flex; gap: 6px; align-items: center;">
+                <input type="text" id="cloud-gcp-sa-path" class="modal-input" placeholder="e.g. C:\keys\my-gcp-sa.json" style="flex: 1;">
+                <button type="button" id="btn-browse-gcp-sa-path" class="btn-secondary" style="padding: 4px 10px; font-size: 11px; white-space: nowrap;">
+                  <i class="fa">&#xf07b;</i> Browse...
+                </button>
+              </div>
+              <span style="font-size: 10px; color: var(--text-subtle); margin-top: 3px; display: block;">
+                Only the file path is saved in config — private keys are never stored in the app.
+              </span>
+            </div>
+            <div class="form-group">
+              <label for="cloud-gcp-access-token">OAuth / Access Token (short-lived, optional)</label>
+              <input type="password" id="cloud-gcp-access-token" class="modal-input" placeholder="ya29.a0AfH6SM...">
+              <span style="font-size: 10px; color: var(--text-subtle); margin-top: 3px; display: block;">
+                Short-lived token saved to config for temporary access.
+              </span>
+            </div>
+            <div class="form-group">
+              <label for="cloud-gcp-project">Default Project ID (optional)</label>
+              <input type="text" id="cloud-gcp-project" class="modal-input" placeholder="e.g. my-gcp-project-12345">
+            </div>
+            <p style="font-size: 10.5px; color: var(--text-subtle); margin-top: 4px;">
+              <i class="fa" style="color: #4285f4;">&#xf05a;</i> Taris also automatically detects local GCP ADC credentials and gcloud CLI tokens if installed.
+            </p>
+          </div>
+
+          <!-- AWS Panel -->
+          <div id="cloud-panel-aws" class="cloud-settings-panel">
+            <div class="form-group">
+              <label for="cloud-aws-session-token">Session Token (STS, short-lived, optional)</label>
+              <input type="password" id="cloud-aws-session-token" class="modal-input" placeholder="IQoJb3JpZ2luX2VjE...">
+              <span style="font-size: 10px; color: var(--text-subtle); margin-top: 3px; display: block;">
+                Short-lived session token saved to config.
+              </span>
+            </div>
+            <div class="form-group">
+              <label for="cloud-aws-access-key">AWS Access Key ID</label>
+              <input type="text" id="cloud-aws-access-key" class="modal-input" placeholder="AKIAIOSFODNN7EXAMPLE">
+            </div>
+            <div class="form-group">
+              <label for="cloud-aws-secret-key">AWS Secret Access Key</label>
+              <input type="password" id="cloud-aws-secret-key" class="modal-input" placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY">
+            </div>
+            <div class="form-row-2">
+              <div class="form-group" style="flex: 1;">
+                <label for="cloud-aws-region">Default Region</label>
+                <input type="text" id="cloud-aws-region" class="modal-input" value="us-east-1" placeholder="us-east-1">
+              </div>
+              <div class="form-group" style="flex: 1;">
+                <label for="cloud-aws-profile">AWS Profile Name</label>
+                <input type="text" id="cloud-aws-profile" class="modal-input" value="default" placeholder="default">
+              </div>
+            </div>
+            <p style="font-size: 10.5px; color: var(--text-subtle); margin-top: 4px;">
+              <i class="fa" style="color: #ff9900;">&#xf05a;</i> Leave blank to automatically use credentials and profiles from ~/.aws/credentials.
+            </p>
+          </div>
+
+          <!-- Azure Panel -->
+          <div id="cloud-panel-azure" class="cloud-settings-panel">
+            <div class="form-group">
+              <label for="cloud-azure-access-token">Bearer / Access Token (short-lived, optional)</label>
+              <input type="password" id="cloud-azure-access-token" class="modal-input" placeholder="eyJ0eXAiOiJKV1Qi...">
+              <span style="font-size: 10px; color: var(--text-subtle); margin-top: 3px; display: block;">
+                Short-lived token saved to config.
+              </span>
+            </div>
+            <div class="form-group">
+              <label for="cloud-azure-sub-id">Azure Subscription ID</label>
+              <input type="text" id="cloud-azure-sub-id" class="modal-input" placeholder="00000000-0000-0000-0000-000000000000">
+            </div>
+            <div class="form-row-2">
+              <div class="form-group" style="flex: 1;">
+                <label for="cloud-azure-tenant-id">Tenant ID (optional)</label>
+                <input type="text" id="cloud-azure-tenant-id" class="modal-input" placeholder="00000000-0000-0000-0000-000000000000">
+              </div>
+              <div class="form-group" style="flex: 1;">
+                <label for="cloud-azure-client-id">Client ID / App ID (optional)</label>
+                <input type="text" id="cloud-azure-client-id" class="modal-input" placeholder="00000000-0000-0000-0000-000000000000">
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="cloud-azure-client-secret">Client Secret (optional for Service Principal)</label>
+              <input type="password" id="cloud-azure-client-secret" class="modal-input" placeholder="Secret value...">
+            </div>
+            <div class="form-group">
+              <label for="cloud-azure-rg">Default Resource Group (optional)</label>
+              <input type="text" id="cloud-azure-rg" class="modal-input" placeholder="e.g. production-resources">
+            </div>
+            <p style="font-size: 10.5px; color: var(--text-subtle); margin-top: 4px;">
+              <i class="fa" style="color: #0078d4;">&#xf05a;</i> Taris can also automatically utilize local 'az login' credentials from the Azure CLI.
+            </p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="modal-cloud-settings-cancel" class="btn-secondary">Cancel</button>
+          <button type="button" id="modal-cloud-settings-submit" class="btn-primary"><i class="fa">&#xf0c7;</i> Save Cloud Settings</button>
+        </div>
+      </div>
+    </div>
+
+
+  <!-- Custom Terminal Context Menu (Controlled Right-Click) -->
+  <div id="terminal-context-menu" class="context-menu hidden">
+    <div class="context-menu-item" id="ctx-menu-copy">
+      <i class="fa">&#xf0c5;</i>
+      <span>Copy</span>
+      <span class="context-menu-shortcut">Ctrl+C</span>
+    </div>
+    <div class="context-menu-item" id="ctx-menu-paste">
+      <i class="fa">&#xf0ea;</i>
+      <span>Paste</span>
+      <span class="context-menu-shortcut">Ctrl+V</span>
+    </div>
+    <div class="context-menu-divider"></div>
+    <div class="context-menu-item" id="ctx-menu-select-all">
+      <i class="fa">&#xf24d;</i>
+      <span>Select All</span>
+    </div>
+    <div class="context-menu-item" id="ctx-menu-clear">
+      <i class="fa">&#xf1f8;</i>
+      <span>Clear Terminal</span>
+    </div>
+  </div>
+
+  <!-- Custom SFTP Context Menu (Files & Folders) -->
+  <div id="sftp-context-menu" class="context-menu hidden">
+    <div class="context-menu-item" id="sftp-ctx-open-built-in">
+      <i class="fa">&#xf044;</i>
+      <span>Edit in Built-in Editor</span>
+    </div>
+    <div class="context-menu-item" id="sftp-ctx-open-external">
+      <i class="fa">&#xf08e;</i>
+      <span id="sftp-ctx-external-label">Edit in External Editor</span>
+    </div>
+    <div class="context-menu-divider"></div>
+    <div class="context-menu-item" id="sftp-ctx-download">
+      <i class="fa">&#xf019;</i>
+      <span>Download to Local</span>
+    </div>
+    <div class="context-menu-item" id="sftp-ctx-paste">
+      <i class="fa">&#xf0ea;</i>
+      <span>Paste Files Here</span>
+      <span class="context-menu-shortcut">Ctrl+V</span>
+    </div>
+    <div class="context-menu-divider"></div>
+    <div class="context-menu-item" id="sftp-ctx-copy-path">
+      <i class="fa">&#xf0c5;</i>
+      <span>Copy Path</span>
+    </div>
+    <div class="context-menu-item" id="sftp-ctx-refresh">
+      <i class="fa">&#xf021;</i>
+      <span>Refresh</span>
+    </div>
+    <div class="context-menu-divider" id="sftp-ctx-delete-divider"></div>
+    <div class="context-menu-item danger" id="sftp-ctx-delete">
+      <i class="fa" style="color: var(--red);">&#xf1f8;</i>
+      <span style="color: var(--red);">Delete</span>
+      <span class="context-menu-shortcut">Del</span>
+    </div>
+  </div>
+
+  <!-- SFTP Column Header Customization Context Menu -->
+  <div id="sftp-col-context-menu" class="context-menu hidden">
+    <div class="context-menu-item" data-col-action="only-name">
+      <i class="fa">&#xf0b2;</i>
+      <span>Only Name</span>
+    </div>
+    <div class="context-menu-divider"></div>
+    <div class="context-menu-item" data-col-target="name" style="opacity: 0.6; cursor: default;">
+      <span class="col-check">✓</span>
+      <span>Name</span>
+    </div>
+    <div class="context-menu-item" data-col-target="date">
+      <span class="col-check" id="check-col-date">✓</span>
+      <span>Date Modified</span>
+    </div>
+    <div class="context-menu-item" data-col-target="size">
+      <span class="col-check" id="check-col-size">✓</span>
+      <span>Size</span>
+    </div>
+    <div class="context-menu-item" data-col-target="type">
+      <span class="col-check" id="check-col-type"></span>
+      <span>Type</span>
+    </div>
+    <div class="context-menu-item" data-col-target="perms">
+      <span class="col-check" id="check-col-perms"></span>
+      <span>Permissions</span>
+    </div>
+  </div>
+
+  <!-- Custom Host Item Context Menu -->
+  <div id="host-context-menu" class="context-menu hidden">
+    <div class="context-menu-item" id="host-ctx-connect">
+      <i class="fa">&#xf120;</i>
+      <span>Connect Terminal</span>
+    </div>
+    <div class="context-menu-item" id="host-ctx-wol">
+      <i class="fa">&#xf0e7;</i>
+      <span>Wake-on-LAN (Magic Packet)</span>
+    </div>
+    <div class="context-menu-divider"></div>
+    <div class="context-menu-item" id="host-ctx-edit">
+      <i class="fa">&#xf044;</i>
+      <span>Edit Host</span>
+    </div>
+    <div class="context-menu-divider"></div>
+    <div class="context-menu-item danger" id="host-ctx-delete">
+      <i class="fa" style="color: var(--red);">&#xf1f8;</i>
+      <span style="color: var(--red);">Delete Host</span>
+    </div>
+  </div>
+  </div>
+
+  <script src="libs/xterm.js"></script>
+  <script src="libs/addon-fit.js"></script>
+  <script src="icons-data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

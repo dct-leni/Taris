@@ -1,0 +1,20 @@
+[workspace]
+members = [
+    "src",
+]
+default-members = ["src"]
+resolver = "2"
+
+[profile.dev.package.ring]
+debug = false
+
+[profile.test.package.ring]
+debug = false
+
+[profile.dev.package.boringtun]
+debug = false
+
+[profile.test.package.boringtun]
+debug = false
+
+

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Taris",
+  "version": "0.1.0",
+  "identifier": "com.taris.studio",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Taris - Modern Homelab & SSH Studio",
+        "width": 1380,
+        "height": 860,
+        "minWidth": 960,
+        "minHeight": 600,
+        "decorations": false,
+        "transparent": true,
+        "resizable": true,
+        "center": true,
+        "incognito": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}
