@@ -25,10 +25,20 @@ pub enum ActiveMeshType {
     NetBird,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ActiveMeshSessions {
+    pub wireguard: Vec<String>,
+    pub tailscale: bool,
+    pub netbird: bool,
+    pub primary: Option<ActiveMeshType>,
+}
+
 #[derive(Clone)]
 pub struct MeshState {
     pub wireguard: Arc<wireguard::WireGuardManager>,
     pub tailscale: Arc<tailscale::TailscaleManager>,
+    pub active_tailscale: Arc<std::sync::atomic::AtomicBool>,
+    pub active_netbird: Arc<std::sync::atomic::AtomicBool>,
     pub active_session: Arc<std::sync::Mutex<Option<ActiveMeshType>>>,
 }
 
@@ -37,6 +47,8 @@ impl Default for MeshState {
         Self {
             wireguard: Arc::new(wireguard::WireGuardManager::new()),
             tailscale: Arc::new(tailscale::TailscaleManager::new()),
+            active_tailscale: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            active_netbird: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             active_session: Arc::new(std::sync::Mutex::new(None)),
         }
     }
@@ -49,6 +61,8 @@ impl MeshState {
                 let _ = sess.shutdown_tx.send(());
             }
         }
+        self.active_tailscale.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.active_netbird.store(false, std::sync::atomic::Ordering::SeqCst);
         if let Ok(mut cur) = self.active_session.lock() {
             *cur = None;
         }
@@ -107,9 +121,6 @@ pub async fn toggle_wireguard_profile_session(
         }
         return Ok(false);
     }
-
-    // Mutual exclusion: disconnect any other active mesh/VPN first!
-    mesh.disconnect_all();
 
     let name = profile.name.clone();
     let session = wireguard::start_wireguard_tunnel(profile).await?;
@@ -193,9 +204,9 @@ pub fn get_wireguard_runtime_statuses(
 // ── Tailscale Tauri Commands ──
 
 #[tauri::command]
-pub fn get_tailscale_runtime_status(config: Option<TailscaleConfig>) -> TailscaleStatus {
+pub async fn get_tailscale_runtime_status(config: Option<TailscaleConfig>) -> TailscaleStatus {
     match config {
-        Some(cfg) => tailscale::get_tailscale_status(&cfg),
+        Some(cfg) => tailscale::get_tailscale_status(&cfg).await,
         None => TailscaleStatus {
             active: false,
             mode: "none".to_string(),
@@ -207,26 +218,39 @@ pub fn get_tailscale_runtime_status(config: Option<TailscaleConfig>) -> Tailscal
             socks5_port: None,
             peers: Vec::new(),
             error: None,
+            hint: None,
         },
     }
-}
-
-#[tauri::command]
-pub async fn get_tailscale_endpoint(
-    target_ip: String,
-    target_port: u16,
-    socks5_port: Option<u16>,
-) -> Result<u16, String> {
-    tailscale::start_tailscale_forwarder(target_ip, target_port, socks5_port).await
 }
 
 // ── NetBird Tauri Commands ──
 
 #[tauri::command]
-pub async fn get_netbird_runtime_status(config: Option<NetBirdConfig>) -> NetBirdStatus {
+pub async fn get_netbird_runtime_status(
+    mesh: tauri::State<'_, MeshState>,
+    config: Option<NetBirdConfig>,
+) -> Result<NetBirdStatus, String> {
+    let is_active = mesh.active_netbird.load(std::sync::atomic::Ordering::SeqCst);
+    if !is_active {
+        return Ok(NetBirdStatus {
+            connected: false,
+            management_url: config
+                .as_ref()
+                .map(|c| c.management_url.clone())
+                .unwrap_or_else(|| "https://api.netbird.io".to_string()),
+            account_id: None,
+            setup_key_info: None,
+            self_peer: None,
+            peers: Vec::new(),
+            error: None,
+            hint: None,
+            socks5_port: None,
+        });
+    }
+
     match config {
-        Some(cfg) => netbird::get_netbird_status(&cfg).await,
-        None => NetBirdStatus {
+        Some(cfg) => Ok(netbird::get_netbird_status(&cfg).await),
+        None => Ok(NetBirdStatus {
             connected: false,
             management_url: "https://api.netbird.io".to_string(),
             account_id: None,
@@ -234,16 +258,10 @@ pub async fn get_netbird_runtime_status(config: Option<NetBirdConfig>) -> NetBir
             self_peer: None,
             peers: Vec::new(),
             error: None,
-        },
+            hint: None,
+            socks5_port: None,
+        }),
     }
-}
-
-#[tauri::command]
-pub async fn get_netbird_endpoint(
-    target_ip: String,
-    target_port: u16,
-) -> Result<u16, String> {
-    netbird::start_netbird_forwarder(vec![format!("{}:{}", target_ip, target_port)]).await
 }
 
 pub fn launch_url_in_browser(url: &str) -> Result<(), String> {
@@ -272,7 +290,7 @@ pub fn launch_url_in_browser(url: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn toggle_tailscale_session(
+pub async fn toggle_tailscale_session(
     mesh: tauri::State<'_, MeshState>,
     config: Option<TailscaleConfig>,
     active: Option<bool>,
@@ -282,18 +300,19 @@ pub fn toggle_tailscale_session(
     if is_active {
         let cfg = config.ok_or_else(|| "Tailscale is not configured. Please enter your Auth Key in settings.".to_string())?;
 
-        let status = tailscale::get_tailscale_status(&cfg);
+        let status = tailscale::get_tailscale_status(&cfg).await;
         if !status.active {
             let err = status.error.unwrap_or_else(|| "Tailscale is not configured. Please enter your key.".to_string());
             return Err(format!("Tailscale connection failed: {}", err));
         }
 
-        mesh.disconnect_all();
+        mesh.active_tailscale.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Ok(mut cur) = mesh.active_session.lock() {
             *cur = Some(ActiveMeshType::Tailscale);
         }
         Ok(true)
     } else {
+        mesh.active_tailscale.store(false, std::sync::atomic::Ordering::SeqCst);
         if let Ok(mut cur) = mesh.active_session.lock() {
             if let Some(ActiveMeshType::Tailscale) = *cur {
                 *cur = None;
@@ -331,12 +350,13 @@ pub async fn toggle_netbird_session(
             return Err(format!("NetBird connection failed: {}", err));
         }
 
-        mesh.disconnect_all();
+        mesh.active_netbird.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Ok(mut cur) = mesh.active_session.lock() {
             *cur = Some(ActiveMeshType::NetBird);
         }
         Ok(true)
     } else {
+        mesh.active_netbird.store(false, std::sync::atomic::Ordering::SeqCst);
         if let Ok(mut cur) = mesh.active_session.lock() {
             if let Some(ActiveMeshType::NetBird) = *cur {
                 *cur = None;
@@ -347,18 +367,23 @@ pub async fn toggle_netbird_session(
 }
 
 #[tauri::command]
-pub fn get_active_mesh_session(
+pub fn get_active_mesh_sessions(
     mesh: tauri::State<'_, MeshState>,
-) -> Option<ActiveMeshType> {
-    mesh.active_session.lock().ok().and_then(|g| g.clone())
-}
+) -> ActiveMeshSessions {
+    let wg_ids = {
+        let map = mesh.wireguard.active_sessions.lock().unwrap();
+        map.keys().cloned().collect()
+    };
+    let ts = mesh.active_tailscale.load(std::sync::atomic::Ordering::SeqCst);
+    let nb = mesh.active_netbird.load(std::sync::atomic::Ordering::SeqCst);
+    let primary = mesh.active_session.lock().ok().and_then(|g| g.clone());
 
-#[tauri::command]
-pub fn disconnect_all_mesh_sessions(
-    mesh: tauri::State<'_, MeshState>,
-) -> bool {
-    mesh.disconnect_all();
-    true
+    ActiveMeshSessions {
+        wireguard: wg_ids,
+        tailscale: ts,
+        netbird: nb,
+        primary,
+    }
 }
 
 #[tauri::command]
@@ -369,22 +394,30 @@ pub fn open_mesh_auth_portal(
 ) -> Result<String, String> {
     let url = match provider.to_lowercase().as_str() {
         "tailscale" => {
-            let base = base_url.as_deref().unwrap_or("").trim();
-            if !base.is_empty() && !base.contains("tailscale.com") {
-                base.to_string()
+            if _page_type.as_deref() == Some("install") {
+                "https://tailscale.com/download".to_string()
             } else {
-                "https://login.tailscale.com/admin/settings/keys".to_string()
+                let base = base_url.as_deref().unwrap_or("").trim();
+                if !base.is_empty() && !base.contains("tailscale.com") {
+                    base.to_string()
+                } else {
+                    "https://login.tailscale.com/admin/settings/keys".to_string()
+                }
             }
         }
         "netbird" => {
-            let base = base_url.as_deref().unwrap_or("").trim();
-            let is_saas = base.is_empty() || base.contains("api.netbird.io") || base.contains("app.netbird.io");
-
-            if is_saas {
-                "https://app.netbird.io/team/users".to_string()
+            if _page_type.as_deref() == Some("install") {
+                "https://netbird.io/docs/how-to/install-netbird".to_string()
             } else {
-                let clean_base = base.trim_end_matches('/').trim_end_matches("/api");
-                format!("{}/team/users", clean_base)
+                let base = base_url.as_deref().unwrap_or("").trim();
+                let is_saas = base.is_empty() || base.contains("api.netbird.io") || base.contains("app.netbird.io");
+
+                if is_saas {
+                    "https://app.netbird.io/team/users".to_string()
+                } else {
+                    let clean_base = base.trim_end_matches('/').trim_end_matches("/api");
+                    format!("{}/team/users", clean_base)
+                }
             }
         }
         _ => return Err(format!("Unknown mesh provider '{}'", provider)),
@@ -419,10 +452,13 @@ pub async fn resolve_mesh_endpoint(
         });
     }
 
-    let active_type = {
-        let cur = mesh.active_session.lock().unwrap();
-        cur.clone()
+    let ts_active = mesh.active_tailscale.load(std::sync::atomic::Ordering::SeqCst);
+    let nb_active = mesh.active_netbird.load(std::sync::atomic::Ordering::SeqCst);
+    let wg_active_pids: Vec<String> = {
+        let map = mesh.wireguard.active_sessions.lock().unwrap();
+        map.keys().cloned().collect()
     };
+    let active_type = mesh.active_session.lock().ok().and_then(|g| g.clone());
 
     let cfg = crate::load_or_init_config(config_path);
 
@@ -430,30 +466,138 @@ pub async fn resolve_mesh_endpoint(
         "mesh" => {
             if let Some(ref m) = active_type {
                 m.clone()
-            } else {
-                let wg_active = {
-                    let map = mesh.wireguard.active_sessions.lock().unwrap();
-                    map.keys().next().cloned()
-                };
-                if let Some(pid) = wg_active {
-                    let name = cfg.wireguard_profiles.iter().find(|p| p.id == pid).map(|p| p.name.clone()).unwrap_or_default();
-                    ActiveMeshType::WireGuard { profile_id: pid, name }
-                } else if cfg.netbird.as_ref().map(|n| n.enabled).unwrap_or(false) {
+            } else if nb_active {
+                ActiveMeshType::NetBird
+            } else if ts_active {
+                ActiveMeshType::Tailscale
+            } else if let Some(pid) = wg_active_pids.first() {
+                let name = cfg.wireguard_profiles.iter().find(|p| &p.id == pid).map(|p| p.name.clone()).unwrap_or_default();
+                ActiveMeshType::WireGuard { profile_id: pid.clone(), name }
+            } else if let Some(ref nb_cfg) = cfg.netbird {
+                if nb_cfg.enabled && nb_cfg.personal_access_token.as_deref().or(nb_cfg.setup_key.as_deref()).map(|s| !s.trim().is_empty()).unwrap_or(false) {
+                    mesh.active_netbird.store(true, std::sync::atomic::Ordering::SeqCst);
+                    if let Ok(mut cur) = mesh.active_session.lock() {
+                        *cur = Some(ActiveMeshType::NetBird);
+                    }
+                    crate::log_info!("mesh", "Auto-connected NetBird on demand for generic mesh route");
                     ActiveMeshType::NetBird
-                } else if cfg.tailscale.as_ref().map(|t| t.enabled).unwrap_or(false) {
-                    ActiveMeshType::Tailscale
+                } else if let Some(ref ts_cfg) = cfg.tailscale {
+                    if ts_cfg.enabled {
+                        let status = tailscale::get_tailscale_status(ts_cfg).await;
+                        if status.active {
+                            mesh.active_tailscale.store(true, std::sync::atomic::Ordering::SeqCst);
+                            if let Ok(mut cur) = mesh.active_session.lock() {
+                                *cur = Some(ActiveMeshType::Tailscale);
+                            }
+                            crate::log_info!("mesh", "Auto-connected Tailscale on demand for generic mesh route");
+                            ActiveMeshType::Tailscale
+                        } else {
+                            return Err(format!(
+                                "Host '{}' has Mesh route enabled, but Tailscale daemon is not active: {}",
+                                host.name,
+                                status.error.unwrap_or_else(|| format!("state: {}", status.backend_state))
+                            ));
+                        }
+                    } else {
+                        return Err(format!(
+                            "Host '{}' has Mesh route enabled, but no Mesh or VPN network is currently connected in Taris. Please connect in the Mesh/VPN drawer first.",
+                            host.name
+                        ));
+                    }
                 } else {
-                    return Err("No Mesh or VPN connection is currently active in Taris. Please connect in the Mesh/VPN drawer.".into());
+                    return Err(format!(
+                        "Host '{}' has Mesh route enabled, but no Mesh or VPN network is currently connected in Taris. Please connect in the Mesh/VPN drawer first.",
+                        host.name
+                    ));
                 }
+            } else {
+                return Err(format!(
+                    "Host '{}' has Mesh route enabled, but no Mesh or VPN network is currently connected in Taris. Please connect in the Mesh/VPN drawer first.",
+                    host.name
+                ));
             }
         }
         r if r.starts_with("wireguard:") => {
             let pid = r.trim_start_matches("wireguard:");
             let name = cfg.wireguard_profiles.iter().find(|p| p.id == pid).map(|p| p.name.clone()).unwrap_or_default();
+            if !wg_active_pids.contains(&pid.to_string()) {
+                return Err(format!(
+                    "Host '{}' is configured to route through WireGuard profile '{}', but that profile is not currently connected in Taris. Please connect it in the Mesh/VPN drawer first.",
+                    host.name, name
+                ));
+            }
             ActiveMeshType::WireGuard { profile_id: pid.to_string(), name }
         }
-        "netbird" => ActiveMeshType::NetBird,
-        "tailscale" => ActiveMeshType::Tailscale,
+        "netbird" => {
+            if !nb_active {
+                if let Some(ref nb_cfg) = cfg.netbird {
+                    if nb_cfg.enabled {
+                        let has_key = nb_cfg
+                            .personal_access_token
+                            .as_deref()
+                            .or(nb_cfg.setup_key.as_deref())
+                            .map(|s| !s.trim().is_empty())
+                            .unwrap_or(false);
+                        if has_key {
+                            mesh.active_netbird.store(true, std::sync::atomic::Ordering::SeqCst);
+                            if let Ok(mut cur) = mesh.active_session.lock() {
+                                *cur = Some(ActiveMeshType::NetBird);
+                            }
+                            crate::log_info!("mesh", "Auto-connected NetBird on demand for host '{}'", host.name);
+                        } else {
+                            return Err(format!(
+                                "Host '{}' is configured to route through NetBird, but NetBird token is missing. Please configure NetBird in the Mesh/VPN drawer.",
+                                host.name
+                            ));
+                        }
+                    } else {
+                        return Err(format!(
+                            "Host '{}' is configured to route through NetBird, but NetBird is disabled. Please enable and connect NetBird in the Mesh/VPN drawer.",
+                            host.name
+                        ));
+                    }
+                } else {
+                    return Err(format!(
+                        "Host '{}' is configured to route through NetBird, but NetBird is not configured in Taris. Please set up NetBird in the Mesh/VPN drawer first.",
+                        host.name
+                    ));
+                }
+            }
+            ActiveMeshType::NetBird
+        }
+        "tailscale" => {
+            if !ts_active {
+                if let Some(ref ts_cfg) = cfg.tailscale {
+                    if ts_cfg.enabled {
+                        let status = tailscale::get_tailscale_status(ts_cfg).await;
+                        if status.active {
+                            mesh.active_tailscale.store(true, std::sync::atomic::Ordering::SeqCst);
+                            if let Ok(mut cur) = mesh.active_session.lock() {
+                                *cur = Some(ActiveMeshType::Tailscale);
+                            }
+                            crate::log_info!("mesh", "Auto-connected Tailscale on demand for host '{}'", host.name);
+                        } else {
+                            return Err(format!(
+                                "Host '{}' is configured to route through Tailscale, but Tailscale daemon is not active: {}",
+                                host.name,
+                                status.error.unwrap_or_else(|| format!("state: {}", status.backend_state))
+                            ));
+                        }
+                    } else {
+                        return Err(format!(
+                            "Host '{}' is configured to route through Tailscale, but Tailscale is disabled.",
+                            host.name
+                        ));
+                    }
+                } else {
+                    return Err(format!(
+                        "Host '{}' is configured to route through Tailscale, but Tailscale is not configured in Taris.",
+                        host.name
+                    ));
+                }
+            }
+            ActiveMeshType::Tailscale
+        }
         _ => {
             return Ok(NetworkEndpointResult {
                 host: target_host,
@@ -477,7 +621,6 @@ pub async fn resolve_mesh_endpoint(
             let active_port = match port {
                 Some(p) => p,
                 None => {
-                    mesh.disconnect_all();
                     let session = wireguard::start_wireguard_tunnel(profile).await?;
                     let p = session.local_forward_port;
                     mesh.wireguard.active_sessions.lock().unwrap().insert(profile_id.clone(), session);
@@ -497,36 +640,21 @@ pub async fn resolve_mesh_endpoint(
         }
         ActiveMeshType::Tailscale => {
             let ts_cfg = cfg.tailscale.as_ref().ok_or_else(|| "Tailscale is not configured in settings".to_string())?;
-            let ts_status = tailscale::get_tailscale_status(ts_cfg);
+            let ts_status = tailscale::get_tailscale_status(ts_cfg).await;
             if !ts_status.active {
                 let err = ts_status.error.unwrap_or_else(|| format!("Tailscale daemon is not running (state: {})", ts_status.backend_state));
                 return Err(format!("Tailscale route failed: {}", err));
             }
 
             let mut candidates = Vec::new();
+            candidates.push(format!("{}:{}", target_host, target_port));
             if let Some(ref exit_node) = ts_cfg.exit_node {
                 if !exit_node.is_empty() && exit_node != &target_host {
                     candidates.push(format!("{}:{}", exit_node, target_port));
                 }
             }
-            candidates.push(format!("{}:{}", target_host, target_port));
 
-            if let Some(peer) = ts_status.peers.iter().find(|p| {
-                p.tailscale_ips.contains(&target_host)
-                    || p.hostname.eq_ignore_ascii_case(&target_host)
-                    || p.dns_name.eq_ignore_ascii_case(&target_host)
-            }) {
-                for h in &cfg.hosts {
-                    let matches_peer = h.name.eq_ignore_ascii_case(&peer.hostname)
-                        || (peer.hostname.len() >= 3 && h.name.to_lowercase().contains(&peer.hostname.to_lowercase()));
-                    if matches_peer && !h.host.is_empty() && h.host != target_host {
-                        candidates.push(format!("{}:{}", h.host, target_port));
-                    }
-                }
-            }
-
-            mesh.disconnect_all();
-            let port = netbird::start_netbird_forwarder(candidates).await?;
+            let port = tailscale::start_tailscale_forwarder(candidates, ts_cfg.socks5_port).await?;
             if let Ok(mut cur) = mesh.active_session.lock() {
                 *cur = Some(ActiveMeshType::Tailscale);
             }
@@ -538,50 +666,62 @@ pub async fn resolve_mesh_endpoint(
             })
         }
         ActiveMeshType::NetBird => {
+            let nb_cfg = cfg.netbird.as_ref().ok_or_else(|| "NetBird is not configured in Taris".to_string())?;
+            let socks5_port = nb_cfg.socks5_port;
+
             let mut candidates = Vec::new();
 
-            // 1. If an exit node is configured, prioritize routing through exit node endpoint
-            if let Some(ref nb_cfg) = cfg.netbird {
-                if let Some(ref exit_node) = nb_cfg.exit_node {
-                    if !exit_node.is_empty() && exit_node != &target_host {
-                        candidates.push(format!("{}:{}", exit_node, target_port));
-                    }
-                }
-            }
-
+            // 1. Direct target host endpoint
             candidates.push(format!("{}:{}", target_host, target_port));
 
-            // 2. Discover peer endpoints from NetBird management
-            if let Some(ref nb_cfg) = cfg.netbird {
-                if let Ok(nb_status) = tokio::time::timeout(
-                    std::time::Duration::from_secs(6),
-                    netbird::query_netbird_management(nb_cfg)
-                ).await.unwrap_or(Err("NetBird API query timed out".into())) {
-                    if let Some(peer) = nb_status.peers.iter().find(|p| {
-                        p.ip == target_host
-                            || p.hostname.as_deref() == Some(&target_host)
-                            || p.name.eq_ignore_ascii_case(&target_host)
-                    }) {
-                        if let Some(ref conn_ip) = peer.connection_ip {
-                            if !conn_ip.is_empty() && conn_ip != &target_host {
-                                candidates.push(format!("{}:{}", conn_ip, target_port));
-                            }
-                        }
-
-                        for h in &cfg.hosts {
-                            let matches_peer = h.name.eq_ignore_ascii_case(&peer.name)
-                                || peer.hostname.as_ref().map_or(false, |hn| h.name.eq_ignore_ascii_case(hn))
-                                || (peer.name.len() >= 3 && h.name.to_lowercase().contains(&peer.name.to_lowercase()));
-                            if matches_peer && !h.host.is_empty() && h.host != target_host {
-                                candidates.push(format!("{}:{}", h.host, target_port));
+            // 2. Discover peer direct endpoints from NetBird management (e.g. STUN / public connection_ip)
+            let mut is_mesh_peer = false;
+            if let Ok(nb_status) = tokio::time::timeout(
+                std::time::Duration::from_secs(6),
+                netbird::query_netbird_management(nb_cfg)
+            ).await.unwrap_or(Err("NetBird API query timed out".into())) {
+                if let Some(peer) = nb_status.peers.iter().find(|p| {
+                    p.ip == target_host
+                        || p.hostname.as_deref() == Some(&target_host)
+                        || p.name.eq_ignore_ascii_case(&target_host)
+                }) {
+                    is_mesh_peer = true;
+                    if let Some(ref conn_ip) = peer.connection_ip {
+                        if !conn_ip.is_empty() && conn_ip != &target_host {
+                            let cand = format!("{}:{}", conn_ip, target_port);
+                            if !candidates.contains(&cand) {
+                                candidates.push(cand);
                             }
                         }
                     }
                 }
             }
 
-            mesh.disconnect_all();
-            let port = netbird::start_netbird_forwarder(candidates).await?;
+            // 3. Check for matching local LAN alternative IP in Taris host configs
+            let host_base_name = host.name.split('(').next().unwrap_or(&host.name).trim();
+            for other in cfg.hosts.iter() {
+                if other.id != host.id && !other.host.is_empty() && other.host != target_host && other.host != "127.0.0.1" {
+                    let other_base = other.name.split('(').next().unwrap_or(&other.name).trim();
+                    if other_base.eq_ignore_ascii_case(host_base_name) {
+                        let cand = format!("{}:{}", other.host, target_port);
+                        if !candidates.contains(&cand) {
+                            candidates.push(cand);
+                            crate::log_info!("mesh", "Added local candidate {} for NetBird host '{}'", other.host, host.name);
+                        }
+                    }
+                }
+            }
+
+            // 4. Only route through exit node if the target is NOT an explicit direct mesh peer
+            if !is_mesh_peer {
+                if let Some(ref exit_node) = nb_cfg.exit_node {
+                    if !exit_node.is_empty() && exit_node != &target_host {
+                        candidates.insert(0, format!("{}:{}", exit_node, target_port));
+                    }
+                }
+            }
+
+            let port = netbird::start_netbird_forwarder(target_host, target_port, socks5_port, candidates).await?;
             if let Ok(mut cur) = mesh.active_session.lock() {
                 *cur = Some(ActiveMeshType::NetBird);
             }
@@ -645,6 +785,7 @@ pub async fn get_mesh_tunnel_endpoint(
         cloud_zone: None,
         cloud_instance_id: None,
         network_route: Some("mesh".into()),
+        protocol: None,
     });
 
     if let Some(th) = target_host_override {
@@ -655,10 +796,10 @@ pub async fn get_mesh_tunnel_endpoint(
     }
 
     tokio::time::timeout(
-        std::time::Duration::from_secs(10),
+        std::time::Duration::from_secs(15),
         resolve_mesh_endpoint(&state.config_path, &state.mesh, &h, target_port_override)
     )
     .await
-    .map_err(|_| "Mesh tunnel resolution timed out (10s)".to_string())?
+    .map_err(|_| "Mesh tunnel resolution timed out (15s)".to_string())?
 }
 

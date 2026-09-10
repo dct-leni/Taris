@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use tauri::Emitter;
-use crate::{is_command_in_path, open_ssh2_session, parse_command_line, resolve_sftp_path, HostConfig};
+use tauri::{Emitter, Manager};
+use crate::{is_command_in_path, parse_command_line, HostConfig};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DiscoveredEditor {
@@ -136,13 +135,14 @@ pub fn discover_external_editors() -> Vec<DiscoveredEditor> {
 }
 
 #[tauri::command]
-pub fn open_in_external_editor(
+pub async fn open_in_external_editor(
     app_handle: tauri::AppHandle,
     host: Option<HostConfig>,
     remote_path: Option<String>,
     local_path: Option<String>,
     editor_path: Option<String>,
 ) -> Result<String, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let editor = match editor_path {
         Some(ref p) if !p.trim().is_empty() => p.trim().to_string(),
         _ => {
@@ -198,10 +198,10 @@ pub fn open_in_external_editor(
     }
 
     if let (Some(h), Some(rpath)) = (host, remote_path) {
-        let sess = open_ssh2_session(&h)?;
-        let sftp = sess.sftp().map_err(|e| format!("SFTP initialization failed: {}", e))?;
+        let app_state = app_handle.state::<crate::AppState>();
+        let sftp = app_state.get_sftp_session(&h).await?;
 
-        let resolved_remote = resolve_sftp_path(&sftp, &rpath);
+        let resolved_remote = crate::ssh::sftp::resolve_sftp_path(&sftp, &rpath).await;
         let file_name = Path::new(&resolved_remote)
             .file_name()
             .and_then(|n| n.to_str())
@@ -212,11 +212,11 @@ pub fn open_in_external_editor(
         std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
         let local_temp_file = temp_dir.join(&file_name);
 
-        let mut remote_file = sftp.open(Path::new(&resolved_remote))
+        let mut remote_file = sftp.open(&resolved_remote).await
             .map_err(|e| format!("Failed to open remote file '{}': {}", resolved_remote, e))?;
 
         let mut content = Vec::new();
-        remote_file.read_to_end(&mut content)
+        remote_file.read_to_end(&mut content).await
             .map_err(|e| format!("Failed to read remote file: {}", e))?;
 
         std::fs::write(&local_temp_file, &content)
@@ -235,11 +235,11 @@ pub fn open_in_external_editor(
         let watcher_name = file_name.clone();
         let app = app_handle.clone();
 
-        std::thread::spawn(move || {
-            use std::time::Duration;
+        tokio::spawn(async move {
+            use tokio::time::{sleep, Duration};
             let mut last_mtime = initial_mtime;
             for _ in 0..7200 {
-                std::thread::sleep(Duration::from_millis(1000));
+                sleep(Duration::from_millis(1000)).await;
                 if !watcher_local.exists() {
                     break;
                 }
@@ -248,17 +248,15 @@ pub fn open_in_external_editor(
                         if mtime > last_mtime {
                             last_mtime = mtime;
                             if let Ok(new_bytes) = std::fs::read(&watcher_local) {
-                                if let Ok(sess) = open_ssh2_session(&watcher_host) {
-                                    if let Ok(sftp) = sess.sftp() {
-                                        let flags = ssh2::OpenFlags::WRITE | ssh2::OpenFlags::TRUNCATE | ssh2::OpenFlags::CREATE;
-                                        if let Ok(mut rf) = sftp.open_mode(Path::new(&watcher_remote), flags, 0o644, ssh2::OpenType::File) {
-                                            if rf.write_all(&new_bytes).is_ok() {
-                                                let _ = app.emit("file-synced-remote", serde_json::json!({
-                                                    "fileName": watcher_name,
-                                                    "hostName": watcher_host.name,
-                                                    "remotePath": watcher_remote,
-                                                }));
-                                            }
+                                let app_state = app.state::<crate::AppState>();
+                                if let Ok(sftp) = app_state.get_sftp_session(&watcher_host).await {
+                                    if let Ok(mut rf) = sftp.create(&watcher_remote).await {
+                                        if rf.write_all(&new_bytes).await.is_ok() && rf.flush().await.is_ok() {
+                                            let _ = app.emit("file-synced-remote", serde_json::json!({
+                                                "fileName": watcher_name,
+                                                "hostName": watcher_host.name,
+                                                "remotePath": watcher_remote,
+                                            }));
                                         }
                                     }
                                 }
@@ -273,4 +271,99 @@ pub fn open_in_external_editor(
     }
 
     Err("Missing file path or host for external editor".to_string())
+}
+
+#[tauri::command]
+pub async fn open_in_native_explorer(
+    app_handle: tauri::AppHandle,
+    host: Option<HostConfig>,
+    remote_path: Option<String>,
+    local_path: Option<String>,
+) -> Result<String, String> {
+    use tokio::io::AsyncReadExt;
+
+    let reveal_path = |target_path: &Path| -> Result<(), String> {
+        let is_dir = target_path.is_dir();
+        let path_str = target_path.to_string_lossy().to_string();
+
+        #[cfg(target_os = "windows")]
+        {
+            let clean_path = path_str.replace('/', "\\");
+            let mut cmd = std::process::Command::new("explorer");
+            if is_dir {
+                cmd.arg(&clean_path);
+            } else {
+                cmd.arg(format!("/select,{}", clean_path));
+            }
+            cmd.spawn()
+                .map_err(|e| format!("Failed to launch Windows Explorer: {}", e))?;
+            Ok(())
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let mut cmd = std::process::Command::new("open");
+            if is_dir {
+                cmd.arg(&path_str);
+            } else {
+                cmd.args(["-R", &path_str]);
+            }
+            cmd.spawn()
+                .map_err(|e| format!("Failed to launch Finder: {}", e))?;
+            Ok(())
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            let mut cmd = std::process::Command::new("xdg-open");
+            if is_dir {
+                cmd.arg(&path_str);
+            } else if let Some(parent) = target_path.parent() {
+                cmd.arg(parent);
+            } else {
+                cmd.arg(&path_str);
+            }
+            cmd.spawn()
+                .map_err(|e| format!("Failed to launch file manager: {}", e))?;
+            Ok(())
+        }
+    };
+
+    if let Some(lpath) = local_path {
+        let clean = crate::normalize_local_path(&lpath);
+        let p = PathBuf::from(&clean);
+        reveal_path(&p)?;
+        return Ok(format!("Opened in native file explorer: {}", clean));
+    }
+
+    if let (Some(h), Some(rpath)) = (host, remote_path) {
+        let app_state = app_handle.state::<crate::AppState>();
+        let sftp = app_state.get_sftp_session(&h).await?;
+
+        let resolved_remote = crate::ssh::sftp::resolve_sftp_path(&sftp, &rpath).await;
+        let file_name = Path::new(&resolved_remote)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file.txt")
+            .to_string();
+
+        let temp_dir = std::env::temp_dir().join("taris_explorer_cache").join(&h.id);
+        std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+        let local_temp_file = temp_dir.join(&file_name);
+
+        let mut remote_file = sftp.open(&resolved_remote).await
+            .map_err(|e| format!("Failed to open remote file '{}': {}", resolved_remote, e))?;
+
+        let mut content = Vec::new();
+        remote_file.read_to_end(&mut content).await
+            .map_err(|e| format!("Failed to read remote file: {}", e))?;
+
+        std::fs::write(&local_temp_file, &content)
+            .map_err(|e| format!("Failed to write cache file: {}", e))?;
+
+        reveal_path(&local_temp_file)?;
+        return Ok(format!("Revealed remote file '{}' in native file explorer", file_name));
+    }
+
+    Err("No valid path provided to open in file explorer".into())
 }

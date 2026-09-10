@@ -1,17 +1,15 @@
 use crate::HostConfig;
 use crate::mesh::ActiveMeshType;
-use crate::ssh::session::open_ssh2_session;
+use crate::ssh::client::TarisSshHandler;
+use crate::ssh::session::open_russh_session;
+use russh::client::Handle;
 use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-pub struct PooledSession {
-    pub sess: ssh2::Session,
-    pub last_used: Instant,
-}
-
+#[derive(Clone)]
 pub struct SshSessionPool {
-    pool: Mutex<HashMap<String, Vec<PooledSession>>>,
+    pool: Arc<Mutex<HashMap<String, Arc<Handle<TarisSshHandler>>>>>,
 }
 
 impl Default for SshSessionPool {
@@ -23,41 +21,39 @@ impl Default for SshSessionPool {
 impl SshSessionPool {
     pub fn new() -> Self {
         Self {
-            pool: Mutex::new(HashMap::new()),
+            pool: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// Acquires a healthy authenticated SSH session for the host, connecting either directly
+    /// Acquires an active authenticated async russh session for the host, connecting either directly
     /// or through a designated target host and port (e.g. mesh/tunnel loopback forwarder).
-    pub fn take_session_with_target(
+    pub async fn take_session_with_target(
         &self,
         host: &HostConfig,
         connect_host: &str,
         connect_port: u16,
-    ) -> Result<ssh2::Session, String> {
-        let key = format!("{}@{}:{}", host.user, host.host, host.port);
-        if let Ok(mut pool) = self.pool.lock() {
-            if let Some(list) = pool.get_mut(&key) {
-                while let Some(pooled) = list.pop() {
-                    if pooled.last_used.elapsed() < Duration::from_secs(90) {
-                        if pooled.sess.authenticated() && pooled.sess.keepalive_send().is_ok() {
-                            return Ok(pooled.sess);
-                        }
-                    }
-                }
+    ) -> Result<Arc<Handle<TarisSshHandler>>, String> {
+        let port = if host.port == 0 { 22 } else { host.port };
+        let key = format!("{}@{}:{}", host.user, host.host, port);
+        let mut pool = self.pool.lock().await;
+        if let Some(handle) = pool.get(&key) {
+            if !handle.is_closed() {
+                return Ok(Arc::clone(handle));
             }
         }
 
-        crate::ssh::session::open_ssh2_session_with_target(host, connect_host, connect_port)
+        let new_handle = crate::ssh::session::open_russh_session_with_target(host, connect_host, connect_port).await?;
+        pool.insert(key, Arc::clone(&new_handle));
+        Ok(new_handle)
     }
 
-    /// Acquires a healthy authenticated SSH session for the host, either from the warm pool
-    /// or by establishing a new connection.
-    pub fn take_session(
+    /// Acquires an active authenticated async russh session for the host, either reusing the warm connection
+    /// or establishing a new connection.
+    pub async fn take_session(
         &self,
         host: &HostConfig,
         active_mesh: Option<&ActiveMeshType>,
-    ) -> Result<ssh2::Session, String> {
+    ) -> Result<Arc<Handle<TarisSshHandler>>, String> {
         let is_mesh = host.network_route.as_deref() == Some("mesh")
             || (host.network_route.is_some() && host.network_route.as_deref() != Some("direct"));
 
@@ -65,51 +61,35 @@ impl SshSessionPool {
             return Err("Host is configured to use Mesh / VPN, but no Mesh or VPN connection is active in Taris. Please connect in the Mesh drawer.".into());
         }
 
-        let key = format!("{}@{}:{}", host.user, host.host, host.port);
-        if let Ok(mut pool) = self.pool.lock() {
-            if let Some(list) = pool.get_mut(&key) {
-                while let Some(pooled) = list.pop() {
-                    // Reuse connection if younger than 90s and keepalive passes
-                    if pooled.last_used.elapsed() < Duration::from_secs(90) {
-                        if pooled.sess.authenticated() && pooled.sess.keepalive_send().is_ok() {
-                            return Ok(pooled.sess);
-                        }
-                    }
-                }
+        let port = if host.port == 0 { 22 } else { host.port };
+        let key = format!("{}@{}:{}", host.user, host.host, port);
+        let mut pool = self.pool.lock().await;
+        if let Some(handle) = pool.get(&key) {
+            if !handle.is_closed() {
+                return Ok(Arc::clone(handle));
             }
         }
 
-        open_ssh2_session(host)
+        let new_handle = open_russh_session(host).await?;
+        pool.insert(key, Arc::clone(&new_handle));
+        Ok(new_handle)
     }
 
-    /// Returns an authenticated session back to the pool for reuse by subsequent commands.
-    pub fn return_session(&self, host: &HostConfig, sess: ssh2::Session) {
-        if !sess.authenticated() {
-            return;
-        }
-        let key = format!("{}@{}:{}", host.user, host.host, host.port);
-        if let Ok(mut pool) = self.pool.lock() {
-            let list = pool.entry(key).or_default();
-            // Cap at 4 warm sessions per host to prevent resource leaks
-            if list.len() < 4 {
-                list.push(PooledSession {
-                    sess,
-                    last_used: Instant::now(),
-                });
-            }
+    /// Removes and cleanly disconnects a session from the pool.
+    pub async fn remove_session(&self, host: &HostConfig) {
+        let port = if host.port == 0 { 22 } else { host.port };
+        let key = format!("{}@{}:{}", host.user, host.host, port);
+        let mut pool = self.pool.lock().await;
+        if let Some(handle) = pool.remove(&key) {
+            let _ = handle.disconnect(russh::Disconnect::ByApplication, "Host disconnected", "en").await;
         }
     }
 
-    /// Prunes expired or dead sessions from the pool.
-    pub fn prune(&self) {
-        if let Ok(mut pool) = self.pool.lock() {
-            for list in pool.values_mut() {
-                list.retain(|pooled| {
-                    pooled.last_used.elapsed() < Duration::from_secs(90)
-                        && pooled.sess.authenticated()
-                        && pooled.sess.keepalive_send().is_ok()
-                });
-            }
+    /// Disconnects all active pooled SSH sessions.
+    pub async fn disconnect_all(&self) {
+        let mut pool = self.pool.lock().await;
+        for (_, handle) in pool.drain() {
+            let _ = handle.disconnect(russh::Disconnect::ByApplication, "Application shutdown", "en").await;
         }
     }
 }

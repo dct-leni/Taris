@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Default capability enabling core IPC and events","local":true,"windows":["main"],"permissions":["core:default","core:event:default","core:event:allow-listen","core:event:allow-emit"]}}

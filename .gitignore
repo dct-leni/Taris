@@ -2,3 +2,5 @@ target/
 .cargo/
 .codegraph/
 .ssh/
+output/
+target_test/

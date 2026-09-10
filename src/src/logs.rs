@@ -101,8 +101,9 @@ pub fn get_app_logs(since_id: Option<u64>, limit: Option<usize>) -> Vec<LogEntry
 }
 
 #[tauri::command]
-pub fn log_webview_event(level: String, target: String, message: String) -> Result<(), String> {
-    add_log(&level, "webview", &target, &message);
+pub fn log_webview_event(level: String, target: Option<String>, message: String) -> Result<(), String> {
+    let t = target.unwrap_or_else(|| "webview".to_string());
+    add_log(&level, "webview", &t, &message);
     Ok(())
 }
 

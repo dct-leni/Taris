@@ -69,18 +69,21 @@ fn extract_http_body(raw: &str) -> Result<String, String> {
     }
 }
 
-pub(crate) fn query_docker_remote(
-    sess: &ssh2::Session,
+pub async fn query_docker_remote(
+    handle: &russh::client::Handle<crate::ssh::TarisSshHandler>,
     docker_port: u16,
     method: &str,
     path: &str,
 ) -> Result<String, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     // 1. Try TCP direct channel over SSH (e.g. port 2375)
-    if let Ok(mut ch) = sess.channel_direct_tcpip("127.0.0.1", docker_port, None) {
+    if let Ok(ch) = handle.channel_open_direct_tcpip("127.0.0.1", docker_port as u32, "127.0.0.1", 22222).await {
+        let mut stream = ch.into_stream();
         let req = format!("{} {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", method, path);
-        if ch.write_all(req.as_bytes()).is_ok() && ch.flush().is_ok() {
+        if stream.write_all(req.as_bytes()).await.is_ok() && stream.flush().await.is_ok() {
             let mut resp = Vec::new();
-            if ch.read_to_end(&mut resp).is_ok() && !resp.is_empty() {
+            if stream.read_to_end(&mut resp).await.is_ok() && !resp.is_empty() {
                 let resp_str = String::from_utf8_lossy(&resp).to_string();
                 if resp_str.starts_with("HTTP/1.1 20") || resp_str.starts_with("HTTP/1.0 20") {
                     return extract_http_body(&resp_str);
@@ -91,12 +94,13 @@ pub(crate) fn query_docker_remote(
 
     // 2. Try docker/podman system dial-stdio over channel session
     for cmd in &["docker system dial-stdio", "podman system dial-stdio"] {
-        if let Ok(mut ch) = sess.channel_session() {
-            if ch.exec(cmd).is_ok() {
+        if let Ok(ch) = handle.channel_open_session().await {
+            if ch.exec(true, *cmd).await.is_ok() {
+                let mut stream = ch.into_stream();
                 let req = format!("{} {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", method, path);
-                if ch.write_all(req.as_bytes()).is_ok() && ch.flush().is_ok() {
+                if stream.write_all(req.as_bytes()).await.is_ok() && stream.flush().await.is_ok() {
                     let mut resp = Vec::new();
-                    if ch.read_to_end(&mut resp).is_ok() && !resp.is_empty() {
+                    if stream.read_to_end(&mut resp).await.is_ok() && !resp.is_empty() {
                         let resp_str = String::from_utf8_lossy(&resp).to_string();
                         if resp_str.starts_with("HTTP/1.1 20") || resp_str.starts_with("HTTP/1.0 20") {
                             return extract_http_body(&resp_str);
@@ -209,12 +213,8 @@ pub async fn check_docker_available(
         if !h.has_docker {
             return Ok(false);
         }
-        if let Ok(sess) = state.take_ssh_session(h) {
-            let ok = query_docker_remote(&sess, port, "GET", "/version").is_ok();
-            if ok {
-                state.return_ssh_session(h, sess);
-            }
-            ok
+        if let Ok(handle) = state.get_russh_session(h).await {
+            query_docker_remote(&handle, port, "GET", "/version").await.is_ok()
         } else {
             false
         }
@@ -236,12 +236,8 @@ pub async fn get_docker_containers(
         if !h.has_docker {
             return Ok(vec![]);
         }
-        let sess = state.take_ssh_session(h)?;
-        let res = query_docker_remote(&sess, port, "GET", "/containers/json?all=1");
-        if res.is_ok() {
-            state.return_ssh_session(h, sess);
-        }
-        res?
+        let handle = state.get_russh_session(h).await?;
+        query_docker_remote(&handle, port, "GET", "/containers/json?all=1").await?
     } else {
         query_docker_local(port, "GET", "/containers/json?all=1")?
     };
@@ -317,12 +313,8 @@ pub async fn docker_container_action(
 
     let path = format!("/containers/{}/{}", container_id, action);
     if let Some(ref h) = host {
-        let sess = state.take_ssh_session(h)?;
-        let res = query_docker_remote(&sess, port, "POST", &path);
-        if res.is_ok() {
-            state.return_ssh_session(h, sess);
-        }
-        res?;
+        let handle = state.get_russh_session(h).await?;
+        query_docker_remote(&handle, port, "POST", &path).await?;
     } else {
         query_docker_local(port, "POST", &path)?;
     }
@@ -339,12 +331,8 @@ pub async fn get_container_stats(
     let port = get_effective_docker_port(&state, host.as_ref(), docker_port);
     let path = format!("/containers/{}/stats?stream=false", container_id);
     let raw_json = if let Some(ref h) = host {
-        let sess = state.take_ssh_session(h)?;
-        let res = query_docker_remote(&sess, port, "GET", &path);
-        if res.is_ok() {
-            state.return_ssh_session(h, sess);
-        }
-        res?
+        let handle = state.get_russh_session(h).await?;
+        query_docker_remote(&handle, port, "GET", &path).await?
     } else {
         query_docker_local(port, "GET", &path)?
     };

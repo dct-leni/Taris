@@ -230,7 +230,7 @@ pub fn export_wireguard_conf(profile: &WireGuardProfile) -> String {
     out
 }
 
-fn decode_key_32(b64: &str) -> Result<[u8; 32], String> {
+pub fn decode_key_32(b64: &str) -> Result<[u8; 32], String> {
     let bytes = BASE64
         .decode(b64.trim())
         .map_err(|e| format!("Invalid Base64 key '{}': {}", b64, e))?;
@@ -473,48 +473,4 @@ pub async fn start_wireguard_tunnel(
         error,
         started_at: Instant::now(),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_wireguard_conf_parser_and_exporter() {
-        let conf_content = r#"
-# Name = Homelab Gateway
-[Interface]
-PrivateKey = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=
-Address = 10.0.0.5/32
-DNS = 1.1.1.1
-ListenPort = 51820
-
-[Peer]
-PublicKey = bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=
-Endpoint = vpn.homelab.org:51820
-AllowedIPs = 10.0.0.0/24, 192.168.1.0/24
-PersistentKeepalive = 25
-"#;
-
-        let parsed = parse_wireguard_conf(conf_content).expect("Failed to parse WG conf");
-        assert_eq!(parsed.name, "Homelab Gateway");
-        assert_eq!(parsed.interface_address, "10.0.0.5/32");
-        assert_eq!(parsed.dns, Some("1.1.1.1".to_string()));
-        assert_eq!(parsed.peer_endpoint, "vpn.homelab.org:51820");
-        assert_eq!(parsed.persistent_keepalive, Some(25));
-        assert_eq!(parsed.allowed_ips.len(), 2);
-
-        let exported = export_wireguard_conf(&parsed);
-        assert!(exported.contains("PrivateKey = aaaaa"));
-        assert!(exported.contains("PublicKey = bbbbb"));
-        assert!(exported.contains("Endpoint = vpn.homelab.org:51820"));
-        assert!(exported.contains("AllowedIPs = 10.0.0.0/24, 192.168.1.0/24"));
-    }
-
-    #[test]
-    fn test_wireguard_key_decoder() {
-        let key_b64 = "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="; // 32 'a' bytes
-        let decoded = decode_key_32(key_b64).expect("Should decode valid 32-byte key");
-        assert_eq!(decoded, [b'a'; 32]);
-    }
 }

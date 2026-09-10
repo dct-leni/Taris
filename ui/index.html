@@ -49,12 +49,17 @@
       <nav id="activity-rail">
         <button class="rail-btn active" id="rail-btn-hosts" data-tab="hosts" title="Hosts (Homelab)"><i class="fa">&#xf233;</i></button>
         <button class="rail-btn" id="rail-btn-cloud" data-tab="cloud" title="Cloud Providers (GCP, AWS, Azure)"><i class="fa">&#xf0c2;</i></button>
-        <button class="rail-btn" id="rail-btn-files" data-tab="files" title="Files (Local & Remote SFTP Explorer)"><i class="fa">&#xf07b;</i></button>
+        <button class="rail-btn" id="rail-btn-files" data-tab="files" title="Files (Active Tab: Local or Remote SFTP)"><i class="fa">&#xf07b;</i></button>
         <button class="rail-btn" id="rail-btn-snippets" data-tab="snippets" title="Notes & Aliases (Double-click: Paste, Right-click: Copy)"><i class="fa">&#xf249;</i></button>
-        <button class="rail-btn disabled" id="rail-btn-docker" data-tab="docker" title="Docker Containers (Active only when connected to remote host with Docker)"><i class="fa">&#xf1b2;</i></button>
+        <button class="rail-btn disabled" id="rail-btn-docker" data-tab="docker" title="Docker Containers (Active only when connected to remote host with Docker)">
+          <svg class="rail-docker-svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style="display: block; margin: auto;">
+            <path d="M13.983 11.078h2.119a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.119a.185.185 0 00-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 00.186-.186V3.574a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 00.186-.186V6.29a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.887c0 .102.082.186.185.186m-2.93 0h2.12a.186.186 0 00.184-.186V6.29a.185.185 0 00-.185-.185H8.1a.185.185 0 00-.185.185v1.887c0 .102.083.186.185.186m-2.964 0h2.119a.186.186 0 00.185-.186V6.29a.185.185 0 00-.185-.185H5.136a.186.186 0 00-.186.185v1.887c0 .102.084.186.186.186m5.893 2.715h2.118a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.185-.186H5.136a.186.186 0 00-.186.185v1.888c0 .102.084.185.186.185m-2.928 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.185-.186H2.208a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m21.602-.752c-.33-.208-1.643-.888-3.414-.148-.227.098-.444.218-.646.357-.463-.383-1.002-.676-1.59-.854-.428-.13-1.047-.197-1.782-.197H.186A.186.186 0 000 12.392c0 .524.048 1.05.143 1.567.574 3.09 2.804 5.288 6.026 6.009.84.188 1.722.282 2.614.282 5.093 0 9.53-2.91 11.233-7.468.966-.145 2.116-.763 2.766-1.92.05-.088.02-.197-.068-.255"/>
+          </svg>
+        </button>
         <button class="rail-btn" id="rail-btn-ports" data-tab="ports" title="Port & Socket Inspector"><i class="fa">&#xf796;</i></button>
         <button class="rail-btn" id="rail-btn-tunnels" data-tab="tunnels" title="Port Forwarding (Tunnels)"><i class="fa">&#xf0ec;</i></button>
         <button class="rail-btn" id="rail-btn-wireguard" data-tab="wireguard" title="WireGuard & Mesh"><i class="fa">&#xf3ed;</i></button>
+        <button class="rail-btn" id="rail-btn-wsl" data-tab="wsl" title="WSL & Linux Virtual Machines" style="display: none;"><i class="fa">&#xf17c;</i></button>
         
         <div class="rail-spacer"></div>
         <button class="rail-btn" id="rail-btn-logs" data-tab="logs" title="App Logs & Diagnostics" style="display: none;"><i class="fa">&#xf188;</i></button>
@@ -71,8 +76,10 @@
               <span class="ip-toggle-slider"></span>
               <span class="ip-toggle-text">IP</span>
             </label>
+            <span id="btn-open-import-hosts" style="color: var(--text-muted); cursor: pointer; font-size: 11px;" title="Universal Host Importer (OpenSSH, PuTTY, WSL, etc.)"><i class="fa">&#xf019;</i> Import</span>
             <span id="btn-open-add-host" style="color: var(--accent); cursor: pointer;"><i class="fa">&#xf067;</i> Add</span>
             <span id="btn-open-add-snippet" style="color: var(--accent); cursor: pointer; display: none;"><i class="fa">&#xf067;</i> Add</span>
+            <span id="btn-wsl-header-import" style="color: var(--text-muted); cursor: pointer; font-size: 11px; display: none;" title="Import Virtual Box (.tar, .vhdx)"><i class="fa">&#xf019;</i> Import Box</span>
           </div>
         </div>
         <div class="drawer-search" id="drawer-search-box">
@@ -89,6 +96,7 @@
             <button id="sftp-up-btn" class="sftp-nav-btn" title="Go up to parent folder"><i class="fa">&#xf062;</i></button>
             <input type="text" id="sftp-current-path" class="sftp-path-input" value="." title="Current path — Click to edit, Enter to navigate" spellcheck="false" autocomplete="off">
             <span id="sftp-refresh-btn" class="sftp-nav-btn" style="cursor: pointer;" title="Refresh"><i class="fa">&#xf021;</i></span>
+            <span id="sftp-follow-term-btn" class="sftp-nav-btn active" style="cursor: pointer; color: var(--accent);" title="Follow Active Terminal Directory (Auto-tracking ON)"><i class="fa">&#xf120;</i></span>
           </div>
           <div class="drawer-search" style="padding: 6px 8px; flex-shrink: 0;">
             <input type="text" id="sftp-search-input" class="search-input" placeholder="Filter files...">
@@ -195,6 +203,27 @@
           </div>
         </div>
 
+        <!-- WSL & Linux Virtual Machines Drawer -->
+        <div id="drawer-wsl" class="drawer-content hidden" style="display: none; flex-direction: column; padding: 0; overflow: hidden; height: 100%;">
+          <div class="docker-toolbar">
+            <div class="docker-target-badge">
+              <i class="fa" style="color: #61afef;">&#xf17c;</i>
+              <span>WSL Linux</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span id="wsl-distro-count" class="status-pill" style="font-size: 10px;">0 Boxes</span>
+              <button class="docker-refresh-btn" id="btn-wsl-shutdown-all" title="Shutdown all active WSL micro-virtual machines"><i class="fa">&#xf011;</i></button>
+              <button class="docker-refresh-btn" id="btn-wsl-refresh" title="Refresh WSL distributions"><i class="fa">&#xf021;</i></button>
+            </div>
+          </div>
+          <div class="drawer-search" style="padding: 0 8px 6px 8px;">
+            <input type="text" id="wsl-search-input" class="search-input" placeholder="Filter boxes or search online catalog...">
+          </div>
+          <div id="drawer-wsl-list" class="drawer-content" style="display: flex; flex-direction: column; flex: 1; overflow-y: auto; padding: 6px 8px;">
+            <!-- Populated dynamically with WSL distributions -->
+          </div>
+        </div>
+
         <!-- App Logs & Diagnostics Drawer -->
         <div id="drawer-logs" class="drawer-content hidden" style="display: none; flex-direction: column; padding: 0; overflow: hidden; height: 100%;">
           <div class="docker-toolbar">
@@ -262,11 +291,25 @@
             <div class="drawer-settings-row">
               <label for="setting-font-family">Font family:</label>
               <select id="setting-font-family" class="drawer-settings-select">
-                <option value="Cascadia Code">Cascadia Code</option>
-                <option value="Fira Code">Fira Code</option>
-                <option value="Consolas">Consolas</option>
-                <option value="Segoe UI">Segoe UI</option>
+                <optgroup label="Bundled Monospace Fonts">
+                  <option value="Cascadia Code">Cascadia Code (Default)</option>
+                  <option value="Hack">Hack</option>
+                  <option value="Source Code Pro">Source Code Pro</option>
+                </optgroup>
+                <optgroup label="Common System Fonts">
+                  <option value="JetBrains Mono">JetBrains Mono</option>
+                  <option value="Consolas">Consolas (Windows)</option>
+                  <option value="Menlo">Menlo (macOS)</option>
+                  <option value="Monaco">Monaco (macOS)</option>
+                  <option value="Ubuntu Mono">Ubuntu Mono (Linux)</option>
+                  <option value="DejaVu Sans Mono">DejaVu Sans Mono (Linux)</option>
+                  <option value="__custom__">Custom System Font...</option>
+                </optgroup>
               </select>
+            </div>
+            <div class="drawer-settings-row" id="setting-custom-font-row" style="display: none;">
+              <label for="setting-custom-font-input">Custom font name:</label>
+              <input type="text" id="setting-custom-font-input" class="search-input" placeholder="Type any system font name (e.g. SF Mono, Fira Code)...">
             </div>
           </div>
 
@@ -352,6 +395,21 @@
               <input type="checkbox" id="setting-enable-app-logs">
               <label for="setting-enable-app-logs" title="Enables App Logs menu on the left rail. Collects all Rust backend and Tauri webview errors/warnings for easy debugging.">Enable App Logs & Diagnostics</label>
             </div>
+
+            <div class="drawer-settings-row checkbox-row" style="margin-top: 6px;">
+              <input type="checkbox" id="setting-enable-mcp-server">
+              <label for="setting-enable-mcp-server" title="Enables embedded Model Context Protocol (MCP) server for local AI agents (Antigravity, Claude Code, Cursor). Host credentials and private keys are never exposed.">Enable MCP Agent Server</label>
+            </div>
+            <div id="mcp-server-config" style="display: none; margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 4px; border: 1px solid var(--border-color);">
+              <div class="drawer-settings-row" style="margin-bottom: 6px;">
+                <label for="setting-mcp-port" style="font-size: 11px;">MCP Port:</label>
+                <input type="number" id="setting-mcp-port" class="drawer-settings-select mono" value="8765" min="1024" max="65535" style="width: 100%; padding: 0 8px;">
+              </div>
+              <div style="font-size: 11px; color: var(--text-dim); display: flex; align-items: center; justify-content: space-between;">
+                <span id="mcp-status-text"><i class="fa" style="color: #666;">&#xf111;</i> Stopped</span>
+                <button type="button" id="btn-copy-mcp-endpoint" class="btn-secondary" style="font-size: 10px; padding: 2px 6px; height: 18px;" title="Copy endpoint URL">Copy URL</button>
+              </div>
+            </div>
           </div>
 
           <!-- Section 4: Left menu order -->
@@ -391,7 +449,7 @@
         <div id="tab-strip">
           <div class="tab-card active" data-view="local" draggable="true">
             <i class="fa">&#xf120;</i>
-            <span class="tab-title">Local (PowerShell)</span>
+            <span class="tab-title">Local</span>
             <span class="tab-close">✕</span>
           </div>
           <button id="add-tab-btn" title="New Terminal Tab">+</button>
@@ -414,7 +472,13 @@
               <span class="titlebar-divider">|</span>
               <span id="editor-status-text" style="color: var(--text-subtle); font-size: 11.5px;">Ready</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <div id="editor-mode-switcher" style="display: flex; align-items: center; gap: 2px; background: var(--bg-dock); padding: 2px; border-radius: 4px; border: 1px solid var(--border);">
+                <button class="editor-mode-btn active" data-mode="code" title="Raw Code Editor"><i class="fa">&#xf121;</i> Code</button>
+                <button class="editor-mode-btn" data-mode="preview" title="Markdown Live Preview" style="display: none;"><i class="fa">&#xf06e;</i> Preview</button>
+                <button class="editor-mode-btn" data-mode="tree" title="JSON/YAML/TOML Tree View" style="display: none;"><i class="fa">&#xf1e0;</i> Tree</button>
+                <button class="editor-mode-btn" data-mode="grid" title="CSV/TSV Data Grid" style="display: none;"><i class="fa">&#xf0ce;</i> Grid</button>
+              </div>
               <span id="editor-lines-count" style="color: var(--text-subtle); font-size: 11px;">0 lines</span>
               <button class="editor-save-btn"><i class="fa">&#xf0c7;</i> Save</button>
             </div>
@@ -425,6 +489,9 @@
               <pre id="editor-highlight" aria-hidden="true" class="editor-pre"><code id="editor-code"></code></pre>
               <textarea id="editor-textarea" class="editor-textarea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="Open a file from the file explorer to view and edit..."></textarea>
             </div>
+            <div id="editor-preview-pane" class="editor-preview-pane" style="display: none;"></div>
+            <div id="editor-tree-pane" class="editor-tree-pane" style="display: none;"></div>
+            <div id="editor-grid-pane" class="editor-grid-pane" style="display: none;"></div>
           </div>
         </div>
 
@@ -551,6 +618,16 @@
             </div>
           </div>
           <div class="form-group">
+            <label><i class="fa" style="color: var(--accent); margin-right: 4px;">&#xf0e7;</i> Connection Protocol</label>
+            <select id="host-form-protocol" class="modal-input">
+              <option value="ssh">SSH (Standard Secure Shell)</option>
+              <option value="mosh">Mosh (Mobile Shell — Roaming & Predictive Echo)</option>
+            </select>
+            <span style="font-size: 10.5px; color: var(--text-subtle); margin-top: 3px; display: block;">
+              Mosh survives sleep/wake, IP changes, and lag via client-side Predictive Echo. Requires `mosh-server` installed on target.
+            </span>
+          </div>
+          <div class="form-group">
             <label>Username</label>
             <input type="text" id="host-form-user" class="modal-input" value="root">
           </div>
@@ -623,6 +700,89 @@
       </div>
     </div>
 
+    <!-- Universal Host Importer Modal -->
+    <div id="modal-import-hosts" class="modal-overlay hidden">
+      <div class="modal-dialog" style="max-width: 680px;">
+        <div class="modal-header">
+          <span><i class="fa" style="color: var(--accent);">&#xf019;</i> Universal Host Importer</span>
+          <button id="modal-import-close-btn" class="modal-close-x">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5;">
+            Detect and import SSH host profiles from your system or configuration backups.
+            Supports <b>OpenSSH (~/.ssh/config)</b>, <b>PuTTY / KiTTY</b>, <b>Termius</b>, <b>MobaXterm</b>, <b>FileZilla</b>, and <b>WSL</b>.
+          </div>
+
+          <div style="display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap;">
+            <button id="btn-detect-system-hosts" class="btn-primary" style="font-size: 11.5px; height: 28px; padding: 0 12px;">
+              <i class="fa">&#xf021;</i> Scan System Hosts
+            </button>
+            <label class="btn-secondary" style="font-size: 11.5px; height: 28px; padding: 0 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
+              <i class="fa">&#xf07c;</i> Open Config / Export File...
+              <input type="file" id="input-import-file" style="display: none;" accept=".json,.ini,.xml,.txt,config,*">
+            </label>
+          </div>
+
+          <div id="import-sources-bar" style="display: flex; gap: 6px; margin-bottom: 10px; font-size: 11px;">
+            <span class="badge-source" style="padding: 2px 8px; border-radius: 3px; background: rgba(97, 175, 239, 0.12); color: #61afef; border: 1px solid rgba(97, 175, 239, 0.25);"><i class="fa">&#xf233;</i> OpenSSH</span>
+            <span class="badge-source" style="padding: 2px 8px; border-radius: 3px; background: rgba(229, 192, 123, 0.12); color: #e5c07b; border: 1px solid rgba(229, 192, 123, 0.25);"><i class="fa">&#xf108;</i> PuTTY / KiTTY</span>
+            <span class="badge-source" style="padding: 2px 8px; border-radius: 3px; background: rgba(152, 195, 121, 0.12); color: #98c379; border: 1px solid rgba(152, 195, 121, 0.25);"><i class="fa">&#xf17c;</i> WSL</span>
+            <span class="badge-source" style="padding: 2px 8px; border-radius: 3px; background: rgba(198, 120, 221, 0.12); color: #c678dd; border: 1px solid rgba(198, 120, 221, 0.25);"><i class="fa">&#xf0c2;</i> Termius / Moba / FileZilla</span>
+          </div>
+
+          <div class="import-list-header" style="display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: var(--bg-card); border: 1px solid var(--border); border-bottom: none; border-radius: 4px 4px 0 0; font-size: 11.5px;">
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" id="import-select-all" checked>
+              <span>Select All</span>
+            </label>
+            <span id="import-detected-count" style="color: var(--text-subtle);">0 hosts found</span>
+          </div>
+          <div id="import-candidates-list" style="max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: 0 0 4px 4px; background: var(--bg-main);">
+            <div style="padding: 24px; text-align: center; color: var(--text-subtle); font-size: 12px;">Click "Scan System Hosts" or choose a file to detect hosts.</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="modal-import-cancel-btn" class="btn-secondary">Cancel</button>
+          <button id="modal-import-confirm-btn" class="btn-primary" disabled><i class="fa">&#xf067;</i> Import Selected (0)</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Archive Inspector Modal (Virtual VFS — from Yazi) -->
+    <div id="modal-archive-inspector" class="modal-overlay hidden">
+      <div class="modal-dialog" style="max-width: 720px;">
+        <div class="modal-header">
+          <span><i class="fa" style="color: var(--accent);">&#xf1c6;</i> Archive Inspector: <span id="archive-modal-title" class="mono" style="font-size: 12px; font-weight: normal; color: var(--text-muted);">archive.zip</span></span>
+          <button id="modal-archive-close-btn" class="modal-close-x">✕</button>
+        </div>
+        <div class="modal-body" style="padding: 12px 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 11px; color: var(--text-muted);">
+            <span id="archive-entry-count">Loading entries...</span>
+            <input type="text" id="archive-filter-input" class="search-input" style="max-width: 200px; height: 24px; font-size: 11px;" placeholder="Filter entries...">
+          </div>
+          <div style="border: 1px solid var(--border); border-radius: 4px; max-height: 320px; overflow-y: auto; background: var(--bg-main);">
+            <table style="width: 100%; border-collapse: collapse; font-size: 11.5px; font-family: var(--font-mono);">
+              <thead>
+                <tr style="background: var(--bg-card); border-bottom: 1px solid var(--border); color: var(--text-subtle); text-align: left;">
+                  <th style="padding: 6px 10px;">Name</th>
+                  <th style="padding: 6px 10px; width: 90px;">Size</th>
+                  <th style="padding: 6px 10px; width: 90px;">Packed</th>
+                  <th style="padding: 6px 10px; width: 120px;">Modified</th>
+                </tr>
+              </thead>
+              <tbody id="archive-entries-body">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 11px; color: var(--text-subtle);"><i class="fa">&#xf05a;</i> Central Directory Seekable VFS — reads metadata in &lt;50ms</span>
+          <button id="modal-archive-done-btn" class="btn-secondary">Close</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Add / Edit Snippet (Notes & Aliases) Modal -->
     <div id="modal-add-snippet" class="modal-overlay hidden">
       <div class="modal-dialog" style="max-width: 460px;">
@@ -661,29 +821,36 @@
         <div class="modal-body">
           <div class="form-group">
             <label for="tunnel-form-name">Tunnel Name</label>
-            <input type="text" id="tunnel-form-name" class="modal-input" placeholder="e.g. Postgres DB, Web Admin, Redis">
+            <input type="text" id="tunnel-form-name" class="modal-input" placeholder="e.g. Web App, Postgres DB, Admin Panel">
           </div>
           <div class="form-group">
-            <label for="tunnel-form-host">SSH Host (Forwarding Gateway)</label>
+            <label for="tunnel-form-host">Remote Host (SSH Server)</label>
             <select id="tunnel-form-host" class="modal-input modal-select">
               <!-- Populated dynamically with configured hosts -->
             </select>
           </div>
           <div class="form-row-2">
             <div class="form-group" style="flex: 1;">
-              <label for="tunnel-form-local-port">Local Port (Listen on 127.0.0.1)</label>
-              <input type="number" id="tunnel-form-local-port" class="modal-input" min="1" max="65535" value="8080">
+              <label for="tunnel-form-remote-port">Remote Port on Host</label>
+              <input type="number" id="tunnel-form-remote-port" class="modal-input" min="1" max="65535" value="3000" placeholder="e.g. 3000">
             </div>
             <div class="form-group" style="flex: 1;">
-              <label for="tunnel-form-remote-port">Remote Port</label>
-              <input type="number" id="tunnel-form-remote-port" class="modal-input" min="1" max="65535" value="80">
+              <label for="tunnel-form-local-port">Local Port (on your PC)</label>
+              <input type="number" id="tunnel-form-local-port" class="modal-input" min="1" max="65535" value="8080" placeholder="e.g. 8080">
             </div>
           </div>
-          <div class="form-group">
-            <label for="tunnel-form-remote-host">Remote Target Host (Relative to SSH Host)</label>
-            <input type="text" id="tunnel-form-remote-host" class="modal-input" value="127.0.0.1" placeholder="127.0.0.1 or 192.168.1.x">
+          <div class="tunnel-summary-preview" id="tunnel-summary-preview" style="padding: 8px 10px; background: rgba(97, 175, 239, 0.09); border: 1px solid rgba(97, 175, 239, 0.25); border-radius: 4px; font-size: 11px; color: var(--text-main); margin-bottom: 12px; line-height: 1.4;">
+            <i class="fa" style="color: var(--accent); margin-right: 4px;">&#xf05a;</i>
+            Open <b id="tunnel-preview-local">http://127.0.0.1:8080</b> on your PC to view port <b id="tunnel-preview-remote">3000</b> on <b id="tunnel-preview-host">host</b>.
           </div>
-          <div class="form-group checkbox-row">
+          <div class="form-group" style="margin-bottom: 8px;">
+            <label for="tunnel-form-remote-host">Target Host / IP on Remote Network (Optional)</label>
+            <input type="text" id="tunnel-form-remote-host" class="modal-input" value="127.0.0.1" placeholder="127.0.0.1 (default: services on this remote host)">
+            <span style="font-size: 10px; color: var(--text-subtle); margin-top: 3px; display: block;">
+              Keep <b>127.0.0.1</b> for web servers, Docker, or apps running directly on the selected host. Only change if forwarding to a different machine on the host's private LAN.
+            </span>
+          </div>
+          <div class="form-group checkbox-row" style="margin-top: 10px;">
             <input type="checkbox" id="tunnel-form-autostart">
             <label for="tunnel-form-autostart">Auto-start tunnel when app launches</label>
           </div>
@@ -748,21 +915,35 @@ PersistentKeepalive = 25"></textarea>
           <div id="mesh-fields-tailscale" class="mesh-type-fields hidden" style="display: none;">
             <div class="form-group">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <label for="ts-form-auth-key" style="margin-bottom: 0;">Tailscale Auth / API Key</label>
+                <label for="ts-form-api-token" style="margin-bottom: 0;">Personal Access Token (for Exit Nodes & Devices)</label>
                 <button type="button" class="btn-compact" id="btn-ts-browser-auth" title="Open Tailscale Keys page in browser">
-                  <i class="fa">&#xf08e;</i> Get Tailscale Key
+                  <i class="fa">&#xf08e;</i> Get API Token
                 </button>
               </div>
               <div class="password-input-group">
-                <input type="password" id="ts-form-auth-key" class="modal-input mono" placeholder="tskey-auth-... or tskey-api-...">
+                <input type="password" id="ts-form-api-token" class="modal-input mono" placeholder="tskey-api-... (Personal Access Token)">
+                <div class="input-addons">
+                  <button type="button" class="btn-input-addon" id="btn-toggle-ts-api-token" title="Show / Hide Token">
+                    <i class="fa">&#xf06e;</i>
+                  </button>
+                </div>
+              </div>
+              <span style="font-size: 10px; color: var(--text-subtle); margin-top: 3px; display: block;">
+                Recommended to auto-list exit nodes: Generate under <b>Personal access tokens</b> in Tailscale Admin > Settings > Keys.
+              </span>
+            </div>
+            <div class="form-group">
+              <label for="ts-form-auth-key" style="margin-bottom: 4px; display: block;">Tailscale Auth Key (optional registration key)</label>
+              <div class="password-input-group">
+                <input type="password" id="ts-form-auth-key" class="modal-input mono" placeholder="tskey-auth-... (Auth Key)">
                 <div class="input-addons">
                   <button type="button" class="btn-input-addon" id="btn-toggle-ts-key" title="Show / Hide Key">
                     <i class="fa">&#xf06e;</i>
                   </button>
                 </div>
               </div>
-              <span style="font-size: 10.5px; color: var(--text-subtle); margin-top: 4px; display: block;">
-                Pure native connection — no external tailscale binary or daemon required.
+              <span style="font-size: 10px; color: var(--text-subtle); margin-top: 3px; display: block;">
+                Pre-authentication key for device registration.
               </span>
             </div>
             <div class="form-group">
@@ -772,6 +953,22 @@ PersistentKeepalive = 25"></textarea>
             <div class="form-group">
               <label for="ts-form-hostname">Device Hostname / Node Name (optional)</label>
               <input type="text" id="ts-form-hostname" class="modal-input" placeholder="taris-client">
+            </div>
+            <div class="form-group">
+              <label for="ts-form-exit-node">Default Exit Node (IP, node name, or MagicDNS, optional)</label>
+              <input type="text" id="ts-form-exit-node" class="modal-input" placeholder="e.g. 100.64.0.5 or exit-node.tailnet.ts.net">
+            </div>
+            <div class="form-group">
+              <label for="ts-form-socks5-port">Local SOCKS5 Proxy Port (optional)</label>
+              <input type="number" id="ts-form-socks5-port" class="modal-input" placeholder="e.g. 1055 (if using tailscaled --socks5-server)">
+              <span style="font-size: 10px; color: var(--text-subtle); margin-top: 3px; display: block;">
+                Optional local SOCKS5 proxy port if configured in Tailscale.
+              </span>
+            </div>
+            <div style="font-size: 11px; color: var(--text-subtle); margin-top: 8px; padding: 6px 8px; background: rgba(97, 175, 239, 0.08); border-radius: 4px; border-left: 2px solid #61afef;">
+              <i class="fa" style="color: #61afef; margin-right: 4px;">&#xf05a;</i>
+              Routes via official Tailscale client running on your system, or local SOCKS5 proxy.
+              <a href="#" id="ts-install-link" style="color: #61afef; text-decoration: underline; margin-left: 4px;">Download Tailscale</a>
             </div>
           </div>
 
@@ -799,6 +996,22 @@ PersistentKeepalive = 25"></textarea>
             <div class="form-group">
               <label for="nb-form-mgmt-url">Management Server URL</label>
               <input type="text" id="nb-form-mgmt-url" class="modal-input" value="https://api.netbird.io" placeholder="https://api.netbird.io">
+            </div>
+            <div class="form-group">
+              <label for="nb-form-socks5-port">Local SOCKS5 Proxy Port (optional)</label>
+              <input type="number" id="nb-form-socks5-port" class="modal-input" placeholder="e.g. 1085 (if using a local SOCKS5 proxy)">
+              <span style="font-size: 10px; color: var(--text-subtle); margin-top: 3px; display: block;">
+                If left empty, Taris routes overlay traffic directly via your host's official NetBird client.
+              </span>
+            </div>
+            <div class="form-group">
+              <label for="nb-form-exit-node">Default Exit Node (Peer IP or name, optional)</label>
+              <input type="text" id="nb-form-exit-node" class="modal-input" placeholder="e.g. 100.64.0.10 or gateway-peer">
+            </div>
+            <div style="font-size: 11px; color: var(--text-subtle); margin-top: 8px; padding: 6px 8px; background: rgba(97, 175, 239, 0.08); border-radius: 4px; border-left: 2px solid #61afef;">
+              <i class="fa" style="color: #61afef; margin-right: 4px;">&#xf05a;</i>
+              Requires official NetBird client running on your computer, or an active SOCKS5 proxy.
+              <a href="#" id="nb-install-link" style="color: #61afef; text-decoration: underline; margin-left: 4px;">Install NetBird client</a>
             </div>
           </div>
 
@@ -940,6 +1153,72 @@ PersistentKeepalive = 25"></textarea>
       </div>
     </div>
 
+    <!-- Add / Create / Import WSL Distribution Modal -->
+    <div id="modal-install-wsl" class="modal-overlay hidden" style="display: none;">
+      <div class="modal-content" style="max-width: 520px;">
+        <div class="modal-header">
+          <div class="modal-title"><i class="fa">&#xf17c;</i> Add / Create Linux Box</div>
+          <button type="button" class="modal-close" onclick="closeInstallWslModal()">&times;</button>
+        </div>
+
+        <!-- Tabs: Online OS Catalog vs Import Rootfs / VHDX Image -->
+        <div style="display: flex; gap: 4px; border-bottom: 1px solid var(--border-color); padding: 6px 16px 0 16px; background: var(--bg-card);">
+          <button type="button" id="tab-btn-wsl-catalog" class="tab-btn active" style="padding: 6px 12px; font-size: 11px; background: transparent; border: none; border-bottom: 2px solid var(--accent); color: var(--text-main); cursor: pointer;">
+            <i class="fa">&#xf002;</i> Online OS Catalog
+          </button>
+          <button type="button" id="tab-btn-wsl-import" class="tab-btn" style="padding: 6px 12px; font-size: 11px; background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--text-subtle); cursor: pointer;">
+            <i class="fa">&#xf019;</i> Import Image (.tar / .vhdx)
+          </button>
+        </div>
+
+        <!-- Tab Panel 1: Online OS Catalog with Live Search -->
+        <div id="panel-wsl-catalog" style="display: flex; flex-direction: column;">
+          <div class="modal-body" style="padding: 12px 16px 8px 16px;">
+            <div class="drawer-search" style="margin-bottom: 10px;">
+              <input type="text" id="wsl-catalog-search-input" class="search-input" placeholder="Search Linux boxes (e.g. Ubuntu, Arch, Debian, Fedora, Kali, openSUSE)..." style="width: 100%; height: 30px; font-size: 11.5px;">
+            </div>
+            <div id="wsl-catalog-list" style="max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px;">
+              <!-- Populated dynamically with searchable online distros -->
+            </div>
+          </div>
+          <div class="modal-footer" style="justify-content: space-between;">
+            <span style="font-size: 10.5px; color: var(--text-subtle);"><i class="fa">&#xf05a;</i> Packages download directly via Windows Subsystem for Linux</span>
+            <button type="button" class="btn-secondary" onclick="closeInstallWslModal()">Close</button>
+          </div>
+        </div>
+
+        <!-- Tab Panel 2: Import Custom Box (.tar, .tar.gz, .vhdx) -->
+        <form id="form-import-wsl" style="display: none; flex-direction: column;">
+          <div class="modal-body" style="padding: 14px 16px;">
+            <div class="form-group">
+              <label for="input-wsl-import-name">Virtual Box Name</label>
+              <input type="text" id="input-wsl-import-name" class="modal-input" placeholder="e.g. custom-alpine-box" required>
+            </div>
+            <div class="form-group">
+              <label for="input-wsl-import-file">Image / Rootfs Path (.tar, .tar.gz, .vhdx)</label>
+              <div style="display: flex; gap: 6px;">
+                <input type="text" id="input-wsl-import-file" class="modal-input" placeholder="C:\images\rootfs.tar.gz" style="flex: 1;" required>
+                <input type="file" id="file-picker-wsl-import" accept=".tar,.tar.gz,.tgz,.vhdx,.vhd" style="display: none;">
+                <button type="button" id="btn-browse-wsl-import" class="btn-secondary" style="height: 28px; padding: 0 10px; font-size: 11px;">
+                  <i class="fa">&#xf07b;</i> Browse...
+                </button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="input-wsl-import-dir">Install Location (optional)</label>
+              <input type="text" id="input-wsl-import-dir" class="modal-input" placeholder="Leave empty for default (%USERPROFILE%\WSL\<Name>)">
+            </div>
+            <p style="font-size: 11px; color: var(--text-subtle); line-height: 1.4; margin-top: 4px;">
+              Imports any standard Linux rootfs archive or pre-existing VHDX disk image directly into WSL2.
+            </p>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn-secondary" onclick="closeInstallWslModal()">Cancel</button>
+            <button type="submit" class="btn-primary"><i class="fa">&#xf019;</i> Import Virtual Box</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
   <!-- Custom Terminal Context Menu (Controlled Right-Click) -->
   <div id="terminal-context-menu" class="context-menu hidden">
@@ -973,6 +1252,10 @@ PersistentKeepalive = 25"></textarea>
     <div class="context-menu-item" id="sftp-ctx-open-external">
       <i class="fa">&#xf08e;</i>
       <span id="sftp-ctx-external-label">Edit in External Editor</span>
+    </div>
+    <div class="context-menu-item" id="sftp-ctx-open-native">
+      <i class="fa">&#xf07c;</i>
+      <span id="sftp-ctx-native-label">Reveal in File Explorer</span>
     </div>
     <div class="context-menu-divider"></div>
     <div class="context-menu-item" id="sftp-ctx-download">
@@ -1036,6 +1319,10 @@ PersistentKeepalive = 25"></textarea>
       <i class="fa">&#xf120;</i>
       <span>Connect Terminal</span>
     </div>
+    <div class="context-menu-item" id="host-ctx-sftp">
+      <i class="fa">&#xf07b;</i>
+      <span>Browse SFTP Files</span>
+    </div>
     <div class="context-menu-item" id="host-ctx-wol">
       <i class="fa">&#xf0e7;</i>
       <span>Wake-on-LAN (Magic Packet)</span>
@@ -1055,7 +1342,22 @@ PersistentKeepalive = 25"></textarea>
 
   <script src="libs/xterm.js"></script>
   <script src="libs/addon-fit.js"></script>
-  <script src="icons-data.js"></script>
-  <script src="app.js"></script>
+  <!-- Modular Frontend Architecture -->
+  <script src="js/core.js"></script>
+  <script src="js/terminal.js"></script>
+  <script src="js/settings.js"></script>
+  <script src="js/hosts.js"></script>
+  <script src="js/files.js"></script>
+  <script src="js/editor.js"></script>
+  <script src="js/database.js"></script>
+  <script src="js/docker.js"></script>
+  <script src="js/ports.js"></script>
+  <script src="js/snippets.js"></script>
+  <script src="js/tunnels.js"></script>
+  <script src="js/mesh.js"></script>
+  <script src="js/cloud.js"></script>
+  <script src="js/wsl.js"></script>
+  <script src="js/logs.js"></script>
+  <script src="js/main.js"></script>
 </body>
 </html>

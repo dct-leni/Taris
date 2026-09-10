@@ -1,11 +1,18 @@
 use chrono::Local;
+pub mod archive;
 pub mod cloud;
 pub mod docker;
 pub mod editor;
+pub mod icons;
+pub mod importer;
 pub mod logs;
+pub mod mcp;
 pub mod mesh;
+pub mod mosh;
 pub mod ports;
 pub mod ssh;
+pub mod terminal;
+pub mod wsl;
 
 pub use logs::*;
 pub use ssh::*;
@@ -16,6 +23,14 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+fn default_mcp_server_port() -> u16 {
+    8765
+}
+
+fn default_false() -> bool {
+    false
+}
 
 fn default_app_font_size() -> u32 {
     13
@@ -87,9 +102,23 @@ fn default_rail_order() -> Vec<String> {
     ]
 }
 
+fn default_font_family() -> String {
+    "Cascadia Code".to_string()
+}
+
+fn default_font_size() -> u32 {
+    14
+}
+
+fn default_shell_name() -> String {
+    "powershell".to_string()
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SettingsConfig {
+    #[serde(default = "default_font_family")]
     pub font_family: String,
+    #[serde(default = "default_font_size")]
     pub font_size: u32,
     #[serde(default = "default_app_font_size")]
     pub app_font_size: u32,
@@ -99,6 +128,7 @@ pub struct SettingsConfig {
     pub app_theme: String,
     #[serde(default = "default_theme")]
     pub terminal_theme: String,
+    #[serde(default = "default_shell_name")]
     pub default_shell: String,
     #[serde(default = "default_cursor_style")]
     pub cursor_style: String,
@@ -124,8 +154,41 @@ pub struct SettingsConfig {
     pub enable_ssh_compression: bool,
     #[serde(default)]
     pub enable_app_logs: bool,
+    #[serde(default = "default_false")]
+    pub enable_mcp_server: bool,
+    #[serde(default = "default_mcp_server_port")]
+    pub mcp_server_port: u16,
     #[serde(default)]
     pub custom_themes: std::collections::HashMap<String, serde_json::Value>,
+}
+
+impl Default for SettingsConfig {
+    fn default() -> Self {
+        Self {
+            font_family: default_font_family(),
+            font_size: default_font_size(),
+            app_font_size: default_app_font_size(),
+            theme: default_theme(),
+            app_theme: default_theme(),
+            terminal_theme: default_theme(),
+            default_shell: default_shell_name(),
+            cursor_style: default_cursor_style(),
+            external_editor: None,
+            external_editor_name: None,
+            docker_port: default_docker_port(),
+            drawer_width: default_drawer_width(),
+            sidebar_width: default_sidebar_width(),
+            sftp_col_date_width: default_sftp_col_date_width(),
+            sftp_col_size_width: default_sftp_col_size_width(),
+            scrollback: default_scrollback(),
+            enable_multiplexing: true,
+            enable_ssh_compression: false,
+            enable_app_logs: false,
+            enable_mcp_server: false,
+            mcp_server_port: default_mcp_server_port(),
+            custom_themes: std::collections::HashMap::new(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -161,6 +224,8 @@ pub struct HostConfig {
     pub cloud_instance_id: Option<String>,
     #[serde(default)]
     pub network_route: Option<String>,
+    #[serde(default)]
+    pub protocol: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -298,7 +363,9 @@ pub use cloud::{CloudAuthConfig, CloudAuthStatus, CloudInstance, CloudProject, C
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
+    #[serde(default)]
     pub settings: SettingsConfig,
+    #[serde(default)]
     pub hosts: Vec<HostConfig>,
     #[serde(default = "default_snippets")]
     pub snippets: Vec<SnippetItem>,
@@ -321,28 +388,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            settings: SettingsConfig {
-                font_family: "Cascadia Code".into(),
-                font_size: 14,
-                app_font_size: 13,
-                theme: "one_dark".into(),
-                app_theme: "one_dark".into(),
-                terminal_theme: "one_dark".into(),
-                default_shell: "powershell".into(),
-                cursor_style: "block".into(),
-                external_editor: None,
-                external_editor_name: None,
-                docker_port: 2375,
-                enable_multiplexing: true,
-                enable_ssh_compression: false,
-                drawer_width: 240,
-                sidebar_width: 310,
-                sftp_col_date_width: 105,
-                sftp_col_size_width: 55,
-                scrollback: 10000,
-                enable_app_logs: false,
-                custom_themes: std::collections::HashMap::new(),
-            },
+            settings: SettingsConfig::default(),
             hosts: vec![],
             snippets: default_snippets(),
             session: SessionConfig::default(),
@@ -390,10 +436,26 @@ pub struct QueryResult {
     pub duration_ms: f64,
 }
 
+pub enum PtySessionBackend {
+    Local {
+        master: Box<dyn portable_pty::MasterPty + Send>,
+        writer: Box<dyn Write + Send>,
+        child: Box<dyn portable_pty::Child + Send + Sync>,
+    },
+    Ssh {
+        write_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+        resize_tx: tokio::sync::mpsc::Sender<(u16, u16)>,
+        shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    },
+    Mosh {
+        write_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+        resize_tx: tokio::sync::mpsc::Sender<(u16, u16)>,
+        shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    },
+}
+
 pub struct PtySession {
-    pub master: Box<dyn portable_pty::MasterPty + Send>,
-    pub writer: Box<dyn Write + Send>,
-    pub child: Box<dyn portable_pty::Child + Send + Sync>,
+    pub backend: PtySessionBackend,
 }
 
 pub struct ActiveTunnel {
@@ -405,17 +467,19 @@ pub struct ActiveTunnel {
     pub error: Arc<Mutex<Option<String>>>,
 }
 
+#[derive(Clone)]
 pub struct AppState {
-    pub pty_sessions: Mutex<HashMap<String, PtySession>>,
+    pub pty_sessions: Arc<Mutex<HashMap<String, PtySession>>>,
     pub config_path: PathBuf,
     pub ssh_pool: ssh::SshSessionPool,
-    pub docker_cpu_samples: Mutex<HashMap<String, (u64, u64, std::time::Instant)>>,
-    pub active_tunnels: Mutex<HashMap<String, ActiveTunnel>>,
+    pub docker_cpu_samples: Arc<Mutex<HashMap<String, (u64, u64, std::time::Instant)>>>,
+    pub active_tunnels: Arc<Mutex<HashMap<String, ActiveTunnel>>>,
     pub mesh: Arc<mesh::MeshState>,
+    pub mcp_handle: Arc<Mutex<Option<mcp::McpServerHandle>>>,
 }
 
 impl AppState {
-    pub fn take_ssh_session(&self, host: &HostConfig) -> Result<ssh2::Session, String> {
+    pub async fn get_russh_session(&self, host: &HostConfig) -> Result<Arc<russh::client::Handle<ssh::TarisSshHandler>>, String> {
         let is_mesh = host.network_route.as_deref() == Some("mesh")
             || (host.network_route.is_some() && host.network_route.as_deref() != Some("direct"));
 
@@ -423,7 +487,7 @@ impl AppState {
             match mesh::resolve_mesh_endpoint_sync(&self.config_path, &self.mesh, host, None) {
                 Ok(ep) => {
                     crate::log_info!("ssh", "Connecting to {} via mesh route {} at {}:{}", host.name, ep.route_type, ep.host, ep.port);
-                    self.ssh_pool.take_session_with_target(host, &ep.host, ep.port)
+                    self.ssh_pool.take_session_with_target(host, &ep.host, ep.port).await
                 }
                 Err(e) => {
                     crate::log_error!("ssh", "Failed to resolve mesh route for {}: {}", host.name, e);
@@ -432,12 +496,46 @@ impl AppState {
             }
         } else {
             let port = if host.port == 0 { 22 } else { host.port };
-            self.ssh_pool.take_session_with_target(host, &host.host, port)
+            self.ssh_pool.take_session_with_target(host, &host.host, port).await
         }
     }
 
-    pub fn return_ssh_session(&self, host: &HostConfig, sess: ssh2::Session) {
-        self.ssh_pool.return_session(host, sess);
+    pub async fn create_interactive_russh_session(
+        &self,
+        host: &HostConfig,
+        banner_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    ) -> Result<Arc<russh::client::Handle<ssh::TarisSshHandler>>, String> {
+        let is_mesh = host.network_route.as_deref() == Some("mesh")
+            || (host.network_route.is_some() && host.network_route.as_deref() != Some("direct"));
+
+        let handler = if let Some(tx) = banner_tx {
+            ssh::TarisSshHandler::with_banner_tx(&host.name, tx)
+        } else {
+            ssh::TarisSshHandler::new(&host.name)
+        };
+
+        if is_mesh {
+            match mesh::resolve_mesh_endpoint_sync(&self.config_path, &self.mesh, host, None) {
+                Ok(ep) => {
+                    crate::log_info!("ssh", "Connecting dedicated interactive russh to {} via mesh route {} at {}:{}", host.name, ep.route_type, ep.host, ep.port);
+                    ssh::open_russh_session_with_handler(host, &ep.host, ep.port, handler).await
+                }
+                Err(e) => {
+                    crate::log_error!("ssh", "Failed to resolve mesh route for {}: {}", host.name, e);
+                    Err(format!("Mesh routing failed for {}: {}", host.name, e))
+                }
+            }
+        } else {
+            let port = if host.port == 0 { 22 } else { host.port };
+            ssh::open_russh_session_with_handler(host, &host.host, port, handler).await
+        }
+    }
+
+    pub async fn get_sftp_session(&self, host: &HostConfig) -> Result<russh_sftp::client::SftpSession, String> {
+        let handle = self.get_russh_session(host).await?;
+        let channel = handle.channel_open_session().await.map_err(|e| format!("Failed to open SSH channel for SFTP: {}", e))?;
+        channel.request_subsystem(true, "sftp").await.map_err(|e| format!("Failed to request SFTP subsystem: {}", e))?;
+        russh_sftp::client::SftpSession::new(channel.into_stream()).await.map_err(|e| format!("Failed to initialize SFTP session: {}", e))
     }
 }
 
@@ -633,14 +731,165 @@ fn get_available_shells() -> Vec<DiscoveredShell> {
 }
 
 #[tauri::command]
-fn pty_spawn(
+async fn pty_spawn(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     session_id: String,
     shell_type: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
+    host: Option<HostConfig>,
+    command: Option<String>,
     on_data: tauri::ipc::Channel<String>,
 ) -> Result<(), String> {
+    if let Some(h) = host {
+        if h.protocol.as_deref() == Some("mosh") {
+            let handle = state.get_russh_session(&h).await?;
+            let (write_tx, resize_tx, shutdown_tx) = crate::mosh::spawn_mosh_session(
+                &handle,
+                &h,
+                cols.unwrap_or(80),
+                rows.unwrap_or(24),
+                on_data,
+            )
+            .await?;
+
+            state.pty_sessions.lock().unwrap().insert(
+                session_id.clone(),
+                PtySession {
+                    backend: PtySessionBackend::Mosh {
+                        write_tx,
+                        resize_tx,
+                        shutdown_tx,
+                    },
+                },
+            );
+
+            return Ok(());
+        }
+
+        // Direct in-process dedicated russh PTY channel session
+        let (banner_tx, mut banner_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let handle = state.create_interactive_russh_session(&h, Some(banner_tx)).await?;
+        let mut channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("Failed to open SSH session channel: {}", e))?;
+
+        channel
+            .request_pty(
+                true,
+                "xterm-256color",
+                cols.unwrap_or(80) as u32,
+                rows.unwrap_or(24) as u32,
+                0,
+                0,
+                &[],
+            )
+            .await
+            .map_err(|e| format!("Failed to request SSH PTY: {}", e))?;
+
+        if let Some(ref cmd) = command.filter(|c| !c.trim().is_empty()) {
+            crate::log_info!("ssh", "Executing command in PTY for {}: {}", h.name, cmd);
+            channel
+                .exec(true, cmd.as_str())
+                .await
+                .map_err(|e| format!("Failed to exec command in SSH PTY: {}", e))?;
+        } else {
+            channel
+                .request_shell(true)
+                .await
+                .map_err(|e| format!("Failed to request SSH shell: {}", e))?;
+        }
+
+        // Forward any pre-auth banner received during authentication
+        while let Ok(banner) = banner_rx.try_recv() {
+            let normalized = banner.replace("\r\n", "\n").replace('\n', "\r\n");
+            let _ = on_data.send(normalized);
+        }
+
+        let (write_tx, mut write_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+        let (resize_tx, mut resize_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(32);
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+
+        state.pty_sessions.lock().unwrap().insert(
+            session_id.clone(),
+            PtySession {
+                backend: PtySessionBackend::Ssh {
+                    write_tx,
+                    resize_tx,
+                    shutdown_tx,
+                },
+            },
+        );
+
+        let session_id_clone = session_id.clone();
+        let app_clone = app.clone();
+        let state_pool = state.ssh_pool.clone();
+        let h_clone = h.clone();
+        let pty_sessions_clone = state.pty_sessions.clone();
+
+        tokio::spawn(async move {
+            let mut zmodem_detector = crate::terminal::ZmodemDetector::new();
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx.recv() => {
+                        let _ = channel.close().await;
+                        let _ = handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
+                        break;
+                    }
+                    Some((c, r)) = resize_rx.recv() => {
+                        let _ = channel.window_change(c as u32, r as u32, 0, 0).await;
+                    }
+                    Some(bytes) = write_rx.recv() => {
+                        if channel.data(&bytes[..]).await.is_err() {
+                            break;
+                        }
+                    }
+                    msg = channel.wait() => {
+                        match msg {
+                            Some(russh::ChannelMsg::Data { ref data }) => {
+                                let (display_bytes, event_opt) = zmodem_detector.feed(data);
+                                if let Some(event) = event_opt {
+                                    use tauri::Emitter;
+                                    let _ = app_clone.emit(&format!("zmodem-event-{}", session_id_clone), &event);
+                                }
+                                if !display_bytes.is_empty() {
+                                    let s = String::from_utf8_lossy(&display_bytes).to_string();
+                                    if on_data.send(s).is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Some(russh::ChannelMsg::ExtendedData { ref data, .. }) => {
+                                let (display_bytes, _) = zmodem_detector.feed(data);
+                                if !display_bytes.is_empty() {
+                                    let s = String::from_utf8_lossy(&display_bytes).to_string();
+                                    if on_data.send(s).is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Some(russh::ChannelMsg::ExitStatus { .. }) | Some(russh::ChannelMsg::Eof) | None => {
+                                let _ = on_data.send("\r\n\x1b[90m[Connection closed]\x1b[0m\r\n".to_string());
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            let _ = channel.close().await;
+            let _ = handle.disconnect(russh::Disconnect::ByApplication, "Session terminated", "en").await;
+            pty_sessions_clone.lock().unwrap().remove(&session_id_clone);
+            state_pool.remove_session(&h_clone).await;
+        });
+
+        return Ok(());
+    }
+
+    // Local shell spawned via portable_pty
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -670,13 +919,15 @@ fn pty_spawn(
     } else if shell == "git-bash" || shell == "bash" || shell == "bash.exe" {
         #[cfg(target_os = "windows")]
         {
-            let bash_path = if is_command_in_path("bash") {
-                "bash.exe".into()
-            } else {
-                find_git_bash()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "bash.exe".into())
-            };
+            let bash_path = find_git_bash()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| {
+                    if is_command_in_path("bash") {
+                        "bash.exe".into()
+                    } else {
+                        "powershell.exe".into()
+                    }
+                });
             let mut c = CommandBuilder::new(bash_path);
             c.args(["--login", "-i"]);
             c
@@ -687,6 +938,10 @@ fn pty_spawn(
             c.args(["-l"]);
             c
         }
+    } else if let Some(distro) = shell.strip_prefix("wsl:") {
+        let mut c = CommandBuilder::new("wsl.exe");
+        c.args(["-d", distro]);
+        c
     } else if shell == "wsl" || shell == "wsl.exe" {
         CommandBuilder::new("wsl.exe")
     } else if shell == "zsh" {
@@ -740,7 +995,28 @@ fn pty_spawn(
         cmd.cwd(cur_dir);
     }
 
-    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    let child = match pair.slave.spawn_command(cmd) {
+        Ok(c) => c,
+        Err(e) => {
+            crate::log_warn!("pty", "Failed to spawn shell '{}': {}. Falling back to default shell.", shell, e);
+            #[cfg(target_os = "windows")]
+            {
+                let mut fallback_cmd = CommandBuilder::new("powershell.exe");
+                fallback_cmd.args(["-NoLogo"]);
+                fallback_cmd.env("TERM", "xterm-256color");
+                if let Ok(cur_dir) = std::env::current_dir() {
+                    fallback_cmd.cwd(cur_dir);
+                }
+                pair.slave.spawn_command(fallback_cmd).map_err(|e2| format!("Failed to spawn shell '{}': {} (fallback error: {})", shell, e, e2))?
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let mut fallback_cmd = CommandBuilder::new("sh");
+                fallback_cmd.env("TERM", "xterm-256color");
+                pair.slave.spawn_command(fallback_cmd).map_err(|e2| format!("Failed to spawn shell '{}': {} (fallback error: {})", shell, e, e2))?
+            }
+        }
+    };
     // Essential for Windows ConPTY: drop slave side immediately to release handles
     drop(pair.slave);
 
@@ -750,9 +1026,11 @@ fn pty_spawn(
     state.pty_sessions.lock().unwrap().insert(
         session_id.clone(),
         PtySession {
-            master: pair.master,
-            writer,
-            child,
+            backend: PtySessionBackend::Local {
+                master: pair.master,
+                writer,
+                child,
+            },
         },
     );
 
@@ -767,75 +1045,142 @@ fn pty_spawn(
                 break;
             }
         }
+        let _ = on_data.send("\r\n\x1b[90m[Process completed]\x1b[0m\r\n".to_string());
     });
 
     Ok(())
 }
 
 #[tauri::command]
-fn pty_write(
+async fn pty_write(
     state: tauri::State<'_, AppState>,
     session_id: String,
     data: String,
 ) -> Result<(), String> {
-    let mut sessions = state.pty_sessions.lock().unwrap();
-    if let Some(sess) = sessions.get_mut(&session_id) {
-        sess.writer
-            .write_all(data.as_bytes())
-            .map_err(|e| e.to_string())?;
-        sess.writer.flush().map_err(|e| e.to_string())?;
+    let tx_opt = {
+        let guard = state.pty_sessions.lock().unwrap();
+        guard.get(&session_id).and_then(|s| match &s.backend {
+            PtySessionBackend::Ssh { write_tx, .. } | PtySessionBackend::Mosh { write_tx, .. } => Some(write_tx.clone()),
+            PtySessionBackend::Local { .. } => None,
+        })
+    };
+
+    if let Some(tx) = tx_opt {
+        let _ = tx.send(data.into_bytes()).await;
+        Ok(())
+    } else {
+        let mut sessions = state.pty_sessions.lock().unwrap();
+        if let Some(sess) = sessions.get_mut(&session_id) {
+            if let PtySessionBackend::Local { ref mut writer, .. } = sess.backend {
+                writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+                writer.flush().map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 #[tauri::command]
-fn pty_resize(
+async fn pty_resize(
     state: tauri::State<'_, AppState>,
     session_id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let mut sessions = state.pty_sessions.lock().unwrap();
-    if let Some(sess) = sessions.get_mut(&session_id) {
-        sess.master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| e.to_string())?;
+    let tx_opt = {
+        let guard = state.pty_sessions.lock().unwrap();
+        guard.get(&session_id).and_then(|s| match &s.backend {
+            PtySessionBackend::Ssh { resize_tx, .. } | PtySessionBackend::Mosh { resize_tx, .. } => Some(resize_tx.clone()),
+            PtySessionBackend::Local { .. } => None,
+        })
+    };
+
+    if let Some(tx) = tx_opt {
+        let _ = tx.send((cols, rows)).await;
+        Ok(())
+    } else {
+        let mut sessions = state.pty_sessions.lock().unwrap();
+        if let Some(sess) = sessions.get_mut(&session_id) {
+            if let PtySessionBackend::Local { ref master, .. } = sess.backend {
+                master
+                    .resize(PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 #[tauri::command]
 fn pty_close(state: tauri::State<'_, AppState>, session_id: String) -> Result<(), String> {
     let mut sessions = state.pty_sessions.lock().unwrap();
     if let Some(mut sess) = sessions.remove(&session_id) {
-        let _ = sess.child.kill();
+        match &mut sess.backend {
+            PtySessionBackend::Local { ref mut child, .. } => {
+                let _ = child.kill();
+            }
+            PtySessionBackend::Ssh { shutdown_tx, .. } | PtySessionBackend::Mosh { shutdown_tx, .. } => {
+                let _ = shutdown_tx.send(());
+            }
+        }
     }
+    Ok(())
+}
+
+#[tauri::command]
+async fn ssh_disconnect_host(state: tauri::State<'_, AppState>, host: HostConfig) -> Result<(), String> {
+    crate::log_info!("ssh", "Explicitly disconnecting host '{}' and clearing from session pool", host.name);
+    state.ssh_pool.remove_session(&host).await;
     Ok(())
 }
 
 // ── Portable Config Commands ──
 
 pub fn load_or_init_config(path: &Path) -> AppConfig {
+    crate::log_info!("config", "Loading configuration from {:?}", path);
     if path.exists() {
-        if let Ok(content) = std::fs::read_to_string(path) {
-            match toml::from_str::<AppConfig>(&content) {
-                Ok(cfg) => return cfg,
+        match std::fs::read_to_string(path) {
+            Ok(content) => match toml::from_str::<AppConfig>(&content) {
+                Ok(cfg) => {
+                    crate::log_info!(
+                        "config",
+                        "Successfully loaded config from {:?}: {} hosts, {} wireguard profiles, tailscale={}, netbird={}",
+                        path,
+                        cfg.hosts.len(),
+                        cfg.wireguard_profiles.len(),
+                        cfg.tailscale.is_some(),
+                        cfg.netbird.is_some()
+                    );
+                    return cfg;
+                }
                 Err(err) => {
+                    crate::log_error!(
+                        "config",
+                        "FAILED to parse config at {:?}: {}. Preserving file and returning default.",
+                        path,
+                        err
+                    );
                     eprintln!("WARNING: Failed to parse config at {:?}: {}. Preserving existing file!", path, err);
                     return AppConfig::default();
                 }
+            },
+            Err(e) => {
+                crate::log_error!("config", "Failed to read config file at {:?}: {}", path, e);
             }
         }
+    } else {
+        crate::log_warn!("config", "Config file at {:?} does not exist. Initializing default.", path);
     }
     let default_cfg = AppConfig::default();
     if !path.exists() {
         if let Ok(serialized) = toml::to_string_pretty(&default_cfg) {
             let _ = std::fs::write(path, serialized);
+            crate::log_info!("config", "Initialized new default config at {:?}", path);
         }
     }
     default_cfg
@@ -849,11 +1194,32 @@ fn get_config(state: tauri::State<'_, AppState>) -> AppConfig {
 #[tauri::command]
 fn save_config(state: tauri::State<'_, AppState>, config: AppConfig) -> Result<(), String> {
     let serialized = toml::to_string_pretty(&config).map_err(|e| e.to_string())?;
-    std::fs::write(&state.config_path, serialized).map_err(|e| e.to_string())?;
+    std::fs::write(&state.config_path, &serialized).map_err(|e| e.to_string())?;
+    crate::log_info!("config", "Saved config to {:?}", state.config_path);
+
+    // If running from target/debug or target/release during development, mirror to workspace root
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let workspace_cfg = if cwd.join("Cargo.toml").exists() {
+        Some(cwd.join("config.toml"))
+    } else if let Some(parent) = cwd.parent() {
+        if parent.join("Cargo.toml").exists() {
+            Some(parent.join("config.toml"))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(ws_cfg) = workspace_cfg {
+        if ws_cfg != state.config_path {
+            let _ = std::fs::write(&ws_cfg, &serialized);
+        }
+    }
     Ok(())
 }
 
-fn cleanup_unused_icons(config_path: &Path, hosts: &[HostConfig]) {
+pub fn cleanup_unused_icons(config_path: &Path, hosts: &[HostConfig]) {
     let base_dir = config_path.parent().unwrap_or(Path::new("."));
     let icons_dir = base_dir.join("ui").join("icons");
 
@@ -927,6 +1293,135 @@ fn save_host_icon(
     }
 
     Ok(format!("icons/{}", file_name))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalThemeItem {
+    pub id: String,
+    pub name: String,
+    pub is_custom: bool,
+    pub theme: serde_json::Value,
+}
+
+#[tauri::command]
+fn save_terminal_theme(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    theme_json: String,
+) -> Result<String, String> {
+    let base_dir = state.config_path.parent().unwrap_or(Path::new("."));
+    let themes_dir = if base_dir.join("themes").exists() {
+        base_dir.join("themes")
+    } else if base_dir.join("ui").join("themes").exists() {
+        base_dir.join("ui").join("themes")
+    } else {
+        base_dir.join("themes")
+    };
+    if !themes_dir.exists() {
+        let _ = std::fs::create_dir_all(&themes_dir);
+    }
+
+    let clean_name: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c.to_ascii_lowercase() } else { '_' })
+        .collect();
+    let file_name = format!("{}.json", clean_name);
+    let target_path = themes_dir.join(&file_name);
+    let _ = std::fs::write(&target_path, &theme_json).map_err(|e| e.to_string())?;
+
+    // Also write to workspace ui/themes if running from target/debug
+    let workspace_themes = PathBuf::from("ui").join("themes");
+    if workspace_themes.exists() || PathBuf::from("ui").exists() {
+        let _ = std::fs::create_dir_all(&workspace_themes);
+        let _ = std::fs::write(workspace_themes.join(&file_name), &theme_json);
+    }
+
+    // Also check parent/ui/themes if in subfolder
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(parent) = cwd.parent() {
+            let parent_themes = parent.join("ui").join("themes");
+            if parent_themes.exists() {
+                let _ = std::fs::write(parent_themes.join(&file_name), &theme_json);
+            }
+        }
+    }
+
+    crate::log_info!("config", "Saved terminal theme file {:?} for '{}'", target_path, name);
+    Ok(clean_name)
+}
+
+#[tauri::command]
+fn load_all_terminal_themes(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<TerminalThemeItem>, String> {
+    let mut search_dirs = Vec::new();
+
+    // 1. Config adjacent themes
+    let base_dir = state.config_path.parent().unwrap_or(Path::new("."));
+    search_dirs.push(base_dir.join("themes"));
+    search_dirs.push(base_dir.join("ui").join("themes"));
+
+    // 2. Workspace ui/themes
+    search_dirs.push(PathBuf::from("ui").join("themes"));
+
+    // 3. Parent ui/themes
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(p) = cwd.parent() {
+            search_dirs.push(p.join("ui").join("themes"));
+        }
+    }
+
+    let mut map: std::collections::HashMap<String, TerminalThemeItem> = std::collections::HashMap::new();
+
+    for dir in search_dirs {
+        if dir.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json") {
+                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                            let id = stem.to_string();
+                            if !map.contains_key(&id) {
+                                if let Ok(content) = std::fs::read_to_string(&path) {
+                                    if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                                        let name = json_val.get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or(stem)
+                                            .to_string();
+                                        let is_custom = id.starts_with("custom_");
+                                        map.insert(id.clone(), TerminalThemeItem {
+                                            id,
+                                            name,
+                                            is_custom,
+                                            theme: json_val,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut result: Vec<TerminalThemeItem> = map.into_values().collect();
+    let defaults_order = [
+        "one_dark", "tokyo_night", "dracula", "catppuccin", "nord",
+        "monokai_pro", "solarized_dark", "gruvbox_dark", "synthwave", "alacritty_dark"
+    ];
+    result.sort_by(|a, b| {
+        let pos_a = defaults_order.iter().position(|&x| x == a.id);
+        let pos_b = defaults_order.iter().position(|&x| x == b.id);
+        match (pos_a, pos_b) {
+            (Some(ia), Some(ib)) => ia.cmp(&ib),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        }
+    });
+
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1028,42 +1523,20 @@ async fn check_hosts_alive(hosts: Vec<HostPingRequest>) -> HashMap<String, bool>
 // ── Telemetry & Real File Browser ──
 
 #[tauri::command]
-fn get_telemetry() -> TelemetryData {
-    TelemetryData {
-        cpu: 0.0,
-        ram: 0.0,
-        net_rx: 0,
-        net_tx: 0,
-        ping_ms: None,
-    }
-}
-
-#[tauri::command]
 async fn get_remote_telemetry(state: tauri::State<'_, AppState>, host: HostConfig) -> Result<TelemetryData, String> {
-    let host_clone = host.clone();
-    let sess = state.take_ssh_session(&host_clone)?;
-
-    let query_res = tokio::task::spawn_blocking(move || {
-        let mut channel = sess.channel_session().map_err(|e| format!("Failed to open SSH channel: {}", e))?;
-        channel.exec("cat /proc/stat /proc/meminfo /proc/net/dev 2>/dev/null")
-            .map_err(|e| format!("Failed to exec proc query: {}", e))?;
-        let mut output = Vec::new();
-        channel.read_to_end(&mut output).map_err(|e| format!("Failed to read channel: {}", e))?;
-        let _ = channel.wait_close();
-        Ok((output, sess))
-    });
-
-    let output = match tokio::time::timeout(std::time::Duration::from_secs(4), query_res).await {
-        Ok(Ok(Ok((o, s)))) => {
-            state.return_ssh_session(&host, s);
-            o
-        }
-        Ok(Ok(Err(e))) => return Err(e),
-        Ok(Err(join_err)) => return Err(format!("Telemetry thread error: {}", join_err)),
+    let handle = state.get_russh_session(&host).await?;
+    let output = match tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        crate::ssh::client::exec_command(&handle, "cat /proc/stat /proc/meminfo /proc/net/dev 2>/dev/null"),
+    )
+    .await
+    {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => return Err(e),
         Err(_) => return Err("Telemetry query timed out (4s)".into()),
     };
 
-    let out_str = String::from_utf8_lossy(&output);
+    let out_str = output;
     if out_str.trim().is_empty() {
         return Ok(TelemetryData {
             cpu: 0.0,
@@ -1157,14 +1630,117 @@ async fn get_remote_telemetry(state: tauri::State<'_, AppState>, host: HostConfi
     })
 }
 
-#[tauri::command]
-fn list_local_files(dir_path: Option<String>) -> Result<Vec<RealFileItem>, String> {
-    let base = match dir_path {
-        Some(d) if !d.trim().is_empty() => PathBuf::from(d),
-        _ => std::env::current_dir().map_err(|e| e.to_string())?,
+#[cfg(target_os = "windows")]
+pub fn normalize_local_path(trimmed: &str) -> String {
+    let norm = trimmed.replace('/', "\\");
+    // 1. Direct WSL DrvFs mount: \mnt\c\... or /mnt/c/... or \\wsl.localhost\<distro>\mnt\c\...
+    let mnt_stripped = if norm.starts_with("\\mnt\\") {
+        Some(&norm[5..])
+    } else if norm.eq_ignore_ascii_case("\\mnt") {
+        None
+    } else if let Some(idx) = norm.find("\\mnt\\") {
+        let prefix = &norm[..idx];
+        if prefix.starts_with("\\\\wsl.localhost\\") || prefix.starts_with("\\\\wsl$\\") {
+            Some(&norm[idx + 5..])
+        } else {
+            None
+        }
+    } else {
+        None
     };
 
-    let entries = std::fs::read_dir(&base).map_err(|e| e.to_string())?;
+    if let Some(rest) = mnt_stripped {
+        let bytes = rest.as_bytes();
+        if !bytes.is_empty() && bytes[0].is_ascii_alphabetic() && (bytes.len() == 1 || bytes[1] == b'\\') {
+            let drive = (bytes[0] as char).to_ascii_uppercase();
+            let sub = if bytes.len() > 2 { &rest[2..] } else { "" };
+            return format!("{}:\\{}", drive, sub);
+        }
+    }
+
+    // 2. Git Bash / MSYS2 style path "/c/Users/..."
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 2 && bytes[0] == b'/' && bytes[1].is_ascii_alphabetic() && (bytes.len() == 2 || bytes[2] == b'/') {
+        let drive = (bytes[1] as char).to_ascii_uppercase();
+        let rest = if bytes.len() > 3 { &trimmed[3..] } else { "" };
+        return format!("{}:\\{}", drive, rest.replace('/', "\\"));
+    }
+
+    trimmed.to_string()
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn normalize_local_path(trimmed: &str) -> String {
+    trimmed.to_string()
+}
+
+#[tauri::command]
+fn list_local_files(dir_path: Option<String>) -> Result<Vec<RealFileItem>, String> {
+    let raw = dir_path.unwrap_or_default();
+    let trimmed = raw.trim();
+
+    let home_dir = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+
+    let clean_trimmed = normalize_local_path(trimmed);
+
+    // 1. Resolve ~, ~/, ~\, or empty / relative
+    let mut candidate: PathBuf = if clean_trimmed.is_empty() || clean_trimmed == "." {
+        std::env::current_dir().unwrap_or_else(|_| home_dir.clone())
+    } else if clean_trimmed == "~" {
+        home_dir.clone()
+    } else if clean_trimmed.starts_with("~/") || clean_trimmed.starts_with("~\\") {
+        home_dir.join(&clean_trimmed[2..])
+    } else {
+        PathBuf::from(&clean_trimmed)
+    };
+
+    // 2. If candidate doesn't exist, check for accidental git branch suffix (e.g. "path [main]" or "path (main)")
+    if !candidate.exists() {
+        let str_val = candidate.to_string_lossy().to_string();
+        if let Some(pos) = str_val.rfind(" [").or_else(|| str_val.rfind(" (")) {
+            let stripped = PathBuf::from(&str_val[..pos]);
+            if stripped.exists() {
+                candidate = stripped;
+            }
+        }
+    }
+
+    // 3. If candidate points to a file (e.g. ConPTY window title like "bash.exe"), resolve to its parent directory
+    if candidate.is_file() {
+        candidate = candidate.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| home_dir.clone());
+    }
+
+    let target_dir = if candidate.is_dir() {
+        candidate
+    } else {
+        // Fallback: check if relative to current working directory
+        if let Ok(cur) = std::env::current_dir() {
+            let joined = cur.join(&candidate);
+            if joined.is_dir() {
+                joined
+            } else if joined.is_file() {
+                joined.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| home_dir.clone())
+            } else {
+                crate::log_warn!("files", "Local directory '{}' does not exist; falling back to home dir '{}'", trimmed, home_dir.display());
+                home_dir.clone()
+            }
+        } else {
+            crate::log_warn!("files", "Local directory '{}' does not exist; falling back to home dir '{}'", trimmed, home_dir.display());
+            home_dir.clone()
+        }
+    };
+
+    let entries = match std::fs::read_dir(&target_dir) {
+        Ok(e) => e,
+        Err(err) => {
+            crate::log_error!("files", "Failed to read local directory '{}': {}", target_dir.display(), err);
+            return Err(format!("Cannot read directory '{}': {}", target_dir.display(), err));
+        }
+    };
+
     let mut files = Vec::new();
 
     for entry in entries.flatten() {
@@ -1220,33 +1796,33 @@ fn list_local_files(dir_path: Option<String>) -> Result<Vec<RealFileItem>, Strin
 }
 
 #[tauri::command]
-fn cache_remote_db(state: tauri::State<'_, AppState>, host: HostConfig, remote_path: String) -> Result<String, String> {
-    let sess = state.take_ssh_session(&host)?;
-    let res = (|| {
-        let (mut remote_file, _stat) = sess.scp_recv(Path::new(&remote_path))
-            .map_err(|e| format!("SCP receive failed for '{}': {}", remote_path, e))?;
+async fn cache_remote_db(state: tauri::State<'_, AppState>, host: HostConfig, remote_path: String) -> Result<String, String> {
+    let sftp = state.get_sftp_session(&host).await?;
+    let resolved_remote = crate::ssh::sftp::resolve_sftp_path(&sftp, &remote_path).await;
 
-        let file_name = std::path::Path::new(&remote_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("remote.db");
+    let file_name = std::path::Path::new(&resolved_remote)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("remote.db");
 
-        let temp_cache_dir = std::env::temp_dir().join("taris_db_cache");
-        let _ = std::fs::create_dir_all(&temp_cache_dir);
-        let local_path = temp_cache_dir.join(format!("{}_{}", host.id, file_name));
+    let temp_cache_dir = std::env::temp_dir().join("taris_db_cache");
+    let _ = std::fs::create_dir_all(&temp_cache_dir);
+    let local_path = temp_cache_dir.join(format!("{}_{}", host.id, file_name));
 
-        let mut local_file = std::fs::File::create(&local_path)
-            .map_err(|e| format!("Failed to create local cache file: {}", e))?;
+    let mut remote_file = sftp
+        .open(&resolved_remote)
+        .await
+        .map_err(|e| format!("SFTP open failed for '{}': {}", resolved_remote, e))?;
 
-        std::io::copy(&mut remote_file, &mut local_file)
-            .map_err(|e| format!("Failed to copy DB over SCP: {}", e))?;
+    let mut local_file = tokio::fs::File::create(&local_path)
+        .await
+        .map_err(|e| format!("Failed to create local cache file: {}", e))?;
 
-        Ok(local_path.to_string_lossy().to_string())
-    })();
-    if res.is_ok() {
-        state.return_ssh_session(&host, sess);
-    }
-    res
+    tokio::io::copy(&mut remote_file, &mut local_file)
+        .await
+        .map_err(|e| format!("Failed to copy DB over SFTP: {}", e))?;
+
+    Ok(local_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -1336,24 +1912,23 @@ fn window_close(window: tauri::Window) -> Result<(), String> {
 
 #[tauri::command]
 fn read_local_file(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+    let clean = normalize_local_path(&path);
+    std::fs::read_to_string(&clean).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn write_local_file(path: String, content: String) -> Result<(), String> {
-    std::fs::write(&path, content).map_err(|e| e.to_string())
+    let clean = normalize_local_path(&path);
+    std::fs::write(&clean, content).map_err(|e| e.to_string())
 }
 
 
-#[tauri::command]
-fn window_is_maximized(window: tauri::Window) -> bool {
-    window.is_maximized().unwrap_or(false)
-}
+
 
 // ── 4.6 Native Clipboard & Multi-Threaded Transfers ──
 
 #[cfg(windows)]
-mod clipboard_utils {
+pub mod clipboard_utils {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::ffi::OsStringExt;
@@ -1483,7 +2058,7 @@ mod clipboard_utils {
 }
 
 #[cfg(not(windows))]
-mod clipboard_utils {
+pub mod clipboard_utils {
     pub fn get_files() -> Result<Vec<String>, String> {
         Ok(vec![])
     }
@@ -1530,13 +2105,13 @@ fn copy_local_files(source_paths: Vec<String>, dest_dir: String) -> Result<Vec<S
     Ok(copied)
 }
 
-#[tauri::command]
-fn delete_local_file(path: String) -> Result<(), String> {
-    let p = Path::new(&path);
+pub fn delete_local_file_path(path: &str) -> Result<(), String> {
+    let clean = normalize_local_path(path);
+    let p = Path::new(&clean);
     if !p.exists() {
-        return Err(format!("Local path '{}' does not exist", path));
+        return Err(format!("Local path '{}' does not exist", clean));
     }
-    let trimmed = path.trim().replace('\\', "/");
+    let trimmed = clean.trim().replace('\\', "/");
     if trimmed == "/" || trimmed.is_empty() || (trimmed.len() <= 3 && trimmed.contains(':')) {
         return Err("Refusing to delete root drive directory".to_string());
     }
@@ -1548,83 +2123,77 @@ fn delete_local_file(path: String) -> Result<(), String> {
     Ok(())
 }
 
-fn bridge_tunnel_client(
-    client_stream: tokio::net::TcpStream,
+#[tauri::command]
+fn delete_local_file(path: String) -> Result<(), String> {
+    delete_local_file_path(&path)
+}
+
+fn is_ignorable_tunnel_disconnect(err_str: &str) -> bool {
+    let lower = err_str.to_lowercase();
+    lower.contains("10054")
+        || lower.contains("10053")
+        || lower.contains("forcibly closed")
+        || lower.contains("connection reset")
+        || lower.contains("connection aborted")
+        || lower.contains("broken pipe")
+        || lower.contains("unexpected eof")
+        || lower.contains("channel closed")
+}
+
+async fn bridge_tunnel_client_async(
+    mut client_stream: tokio::net::TcpStream,
+    config_path: &std::path::Path,
+    mesh: &mesh::MeshState,
     host: &HostConfig,
     remote_host: &str,
     remote_port: u16,
     bytes_rx: Arc<std::sync::atomic::AtomicU64>,
     bytes_tx: Arc<std::sync::atomic::AtomicU64>,
 ) -> Result<(), String> {
-    let std_stream = client_stream.into_std().map_err(|e| format!("Socket conversion failed: {}", e))?;
-    std_stream.set_nonblocking(true).map_err(|e| format!("Set nonblocking failed: {}", e))?;
+    let is_mesh = host.network_route.as_deref() == Some("mesh")
+        || (host.network_route.is_some() && host.network_route.as_deref() != Some("direct"));
 
-    let mut stream_read = std_stream.try_clone().map_err(|e| format!("Stream clone failed: {}", e))?;
-    let mut stream_write = std_stream;
+    let handle = if is_mesh {
+        let ep = mesh::resolve_mesh_endpoint_sync(config_path, mesh, host, None)?;
+        crate::ssh::session::open_russh_session_with_target(host, &ep.host, ep.port).await?
+    } else {
+        let port = if host.port == 0 { 22 } else { host.port };
+        crate::ssh::session::open_russh_session_with_target(host, &host.host, port).await?
+    };
 
-    let sess = open_ssh2_session(host)?;
-    sess.set_blocking(false);
-    let mut channel = sess.channel_direct_tcpip(remote_host, remote_port, None)
-        .map_err(|e| format!("channel_direct_tcpip failed: {}", e))?;
+    let is_direct_host = remote_host.trim().is_empty()
+        || remote_host == "127.0.0.1"
+        || remote_host == "localhost"
+        || remote_host == host.host;
 
-    let mut buf_in = [0u8; 16384];
-    let mut buf_out = [0u8; 16384];
+    let primary_target = if is_direct_host { "127.0.0.1" } else { remote_host };
 
-    loop {
-        let mut idle = true;
+    let channel = handle
+        .channel_open_direct_tcpip(primary_target, remote_port as u32, "127.0.0.1", 12345)
+        .await
+        .map_err(|e| format!("channel_open_direct_tcpip failed for {}:{}: {}", primary_target, remote_port, e))?;
 
-        // 1. Read from local client -> write to remote SSH channel
-        match stream_read.read(&mut buf_in) {
-            Ok(0) => break,
-            Ok(n) => {
-                idle = false;
-                bytes_tx.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
-                let mut written = 0;
-                while written < n {
-                    match channel.write(&buf_in[written..n]) {
-                        Ok(w) => written += w,
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            std::thread::sleep(std::time::Duration::from_millis(2));
-                        }
-                        Err(_) => break,
-                    }
-                }
+    crate::log_info!("tunnel", "Port forward established to {}:{} via {}", primary_target, remote_port, host.name);
+
+    let mut channel_stream = channel.into_stream();
+
+    let (copied_tx, copied_rx) = match tokio::io::copy_bidirectional(&mut client_stream, &mut channel_stream).await {
+        Ok((tx, rx)) => (tx, rx),
+        Err(e) => {
+            let _ = handle.disconnect(russh::Disconnect::ByApplication, "Tunnel closed", "en").await;
+            let err_msg = format!("Tunnel stream error: {}", e);
+            if is_ignorable_tunnel_disconnect(&err_msg) {
+                return Ok(());
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => break,
+            return Err(err_msg);
         }
+    };
 
-        // 2. Read from remote SSH channel -> write to local client
-        match channel.read(&mut buf_out) {
-            Ok(0) => {
-                if channel.eof() {
-                    break;
-                }
-            }
-            Ok(n) => {
-                idle = false;
-                bytes_rx.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
-                let mut written = 0;
-                while written < n {
-                    match stream_write.write(&buf_out[written..n]) {
-                        Ok(w) => written += w,
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            std::thread::sleep(std::time::Duration::from_millis(2));
-                        }
-                        Err(_) => break,
-                    }
-                }
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => break,
-        }
+    let _ = handle.disconnect(russh::Disconnect::ByApplication, "Tunnel closed", "en").await;
 
-        if idle {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-    }
+    bytes_tx.fetch_add(copied_tx, std::sync::atomic::Ordering::Relaxed);
+    bytes_rx.fetch_add(copied_rx, std::sync::atomic::Ordering::Relaxed);
 
-    let _ = channel.close();
     Ok(())
 }
 
@@ -1690,6 +2259,7 @@ fn delete_tunnel(state: tauri::State<'_, AppState>, tunnel_id: String) -> Result
     if let Ok(mut active) = state.active_tunnels.lock() {
         if let Some(act) = active.remove(&tunnel_id) {
             let _ = act.shutdown_tx.send(());
+            crate::log_info!("tunnel", "Tunnel '{}' stopped upon deletion", tunnel_id);
         }
     }
     let mut cfg = load_or_init_config(&state.config_path);
@@ -1705,6 +2275,7 @@ async fn toggle_tunnel(state: tauri::State<'_, AppState>, tunnel_id: String, act
         if let Ok(mut active_map) = state.active_tunnels.lock() {
             if let Some(act) = active_map.remove(&tunnel_id) {
                 let _ = act.shutdown_tx.send(());
+                crate::log_info!("tunnel", "Tunnel '{}' disabled and connections terminated", tunnel_id);
             }
         }
         return Ok(false);
@@ -1748,6 +2319,8 @@ async fn toggle_tunnel(state: tauri::State<'_, AppState>, tunnel_id: String, act
 
     let remote_host = tunnel.remote_host.clone();
     let remote_port = tunnel.remote_port;
+    let cfg_path = state.config_path.clone();
+    let mesh_state = state.mesh.clone();
 
     tokio::spawn(async move {
         loop {
@@ -1764,10 +2337,24 @@ async fn toggle_tunnel(state: tauri::State<'_, AppState>, tunnel_id: String, act
                             let b_rx = Arc::clone(&bytes_rx);
                             let b_tx = Arc::clone(&bytes_tx);
                             let conn_count = Arc::clone(&active_connections);
+                            let c_path = cfg_path.clone();
+                            let m_state = mesh_state.clone();
+                            let mut conn_shutdown = shutdown_tx.subscribe();
 
-                            tokio::task::spawn_blocking(move || {
+                            tokio::spawn(async move {
                                 conn_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                let _ = bridge_tunnel_client(client_stream, &host_c, &r_host, r_port, b_rx, b_tx);
+                                tokio::select! {
+                                    _ = conn_shutdown.recv() => {
+                                        // Tunnel disabled by user -> abort bridged stream cleanly
+                                    }
+                                    res = bridge_tunnel_client_async(client_stream, &c_path, &m_state, &host_c, &r_host, r_port, b_rx, b_tx) => {
+                                        if let Err(e) = res {
+                                            if !is_ignorable_tunnel_disconnect(&e) {
+                                                crate::log_error!("tunnel", "Tunnel forward error for {} ({}:{}): {}", host_c.name, r_host, r_port, e);
+                                            }
+                                        }
+                                    }
+                                }
                                 conn_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                             });
                         }
@@ -1834,6 +2421,173 @@ fn launch_url_in_browser(url: String) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn get_mcp_status(state: tauri::State<'_, AppState>) -> mcp::McpStatus {
+    let handle_lock = state.mcp_handle.lock().unwrap();
+    if let Some(ref handle) = *handle_lock {
+        mcp::McpStatus {
+            active: true,
+            port: handle.port,
+            url: format!("http://127.0.0.1:{}/mcp", handle.port),
+        }
+    } else {
+        let cfg = load_or_init_config(&state.config_path);
+        mcp::McpStatus {
+            active: false,
+            port: cfg.settings.mcp_server_port,
+            url: format!("http://127.0.0.1:{}/mcp", cfg.settings.mcp_server_port),
+        }
+    }
+}
+
+#[tauri::command]
+async fn toggle_mcp_server(
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+    port: Option<u16>,
+) -> Result<mcp::McpStatus, String> {
+    let target_port = port.unwrap_or_else(|| {
+        let cfg = load_or_init_config(&state.config_path);
+        cfg.settings.mcp_server_port
+    });
+
+    let mut handle_lock = state.mcp_handle.lock().unwrap();
+
+    // Persist to config.toml
+    let mut cfg = load_or_init_config(&state.config_path);
+    cfg.settings.enable_mcp_server = enabled;
+    cfg.settings.mcp_server_port = target_port;
+    let serialized = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    let _ = std::fs::write(&state.config_path, &serialized);
+
+    // Mirror to workspace root if present in dev
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let workspace_cfg = if cwd.join("Cargo.toml").exists() {
+        Some(cwd.join("config.toml"))
+    } else if let Some(parent) = cwd.parent() {
+        if parent.join("Cargo.toml").exists() {
+            Some(parent.join("config.toml"))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(ws_path) = workspace_cfg {
+        let _ = std::fs::write(ws_path, &serialized);
+    }
+
+    if enabled {
+        if let Some(ref h) = *handle_lock {
+            if h.port == target_port {
+                return Ok(mcp::McpStatus {
+                    active: true,
+                    port: target_port,
+                    url: format!("http://127.0.0.1:{}/mcp", target_port),
+                });
+            }
+            let _ = h.shutdown_tx.send(());
+        }
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+        let state_clone = state.inner().clone();
+        tokio::spawn(async move {
+            if let Err(e) = mcp::start_mcp_server(state_clone, target_port, shutdown_rx).await {
+                crate::log_error!("mcp", "MCP server failed on port {}: {}", target_port, e);
+            }
+        });
+
+        *handle_lock = Some(mcp::McpServerHandle {
+            port: target_port,
+            shutdown_tx,
+        });
+
+        crate::log_info!("mcp", "Enabled MCP server on http://127.0.0.1:{}/mcp", target_port);
+
+        Ok(mcp::McpStatus {
+            active: true,
+            port: target_port,
+            url: format!("http://127.0.0.1:{}/mcp", target_port),
+        })
+    } else {
+        if let Some(h) = handle_lock.take() {
+            let _ = h.shutdown_tx.send(());
+            crate::log_info!("mcp", "Stopped MCP server on port {}", h.port);
+        }
+        Ok(mcp::McpStatus {
+            active: false,
+            port: target_port,
+            url: format!("http://127.0.0.1:{}/mcp", target_port),
+        })
+    }
+}
+
+#[tauri::command]
+async fn wsl_get_status() -> wsl::WslStatus {
+    tokio::task::spawn_blocking(wsl::get_wsl_status)
+        .await
+        .unwrap_or_else(|_| wsl::WslStatus {
+            is_installed: false,
+            distros: Vec::new(),
+            default_distro: None,
+        })
+}
+
+#[tauri::command]
+async fn wsl_start_distro(distro: String) -> Result<(), String> {
+    wsl::start_wsl_distro(&distro).await
+}
+
+#[tauri::command]
+async fn wsl_stop_distro(distro: String) -> Result<(), String> {
+    wsl::stop_wsl_distro(&distro).await
+}
+
+#[tauri::command]
+async fn wsl_shutdown_all() -> Result<(), String> {
+    wsl::shutdown_all_wsl().await
+}
+
+#[tauri::command]
+async fn wsl_install_distro(distro_name: String) -> Result<(), String> {
+    wsl::install_wsl_distro(&distro_name).await
+}
+
+#[tauri::command]
+async fn wsl_unregister_distro(distro: String) -> Result<(), String> {
+    wsl::unregister_wsl_distro(&distro).await
+}
+
+#[tauri::command]
+fn wsl_add_to_hosts(state: tauri::State<'_, AppState>, distro: wsl::WslDistro) -> Result<AppConfig, String> {
+    let host_cfg = wsl::create_wsl_host_config(&distro);
+    let mut cfg = load_or_init_config(&state.config_path);
+    if let Some(pos) = cfg.hosts.iter().position(|h| h.id == host_cfg.id) {
+        cfg.hosts[pos] = host_cfg;
+    } else {
+        cfg.hosts.push(host_cfg);
+    }
+    let serialized = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&state.config_path, &serialized).map_err(|e| e.to_string())?;
+    Ok(cfg)
+}
+
+
+
+#[tauri::command]
+async fn wsl_get_available_distros() -> Result<Vec<wsl::WslOnlineDistro>, String> {
+    Ok(wsl::get_available_wsl_distros().await)
+}
+
+#[tauri::command]
+async fn wsl_import_distro(
+    distro_name: String,
+    install_location: String,
+    file_path: String,
+) -> Result<(), String> {
+    wsl::import_wsl_distro(&distro_name, &install_location, &file_path).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Ensure WebView2 does not write persistent HTTP or shader disk cache between runs
@@ -1858,22 +2612,36 @@ pub fn run() {
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let cwd_config = cwd.join("config.toml");
     let exe_dir = std::env::current_exe()
         .map(|p| p.parent().unwrap_or(Path::new(".")).to_path_buf())
         .unwrap_or_else(|_| PathBuf::from("."));
+
+    // The application config is strictly adjacent to the executable
     let exe_config = exe_dir.join("config.toml");
 
-    let config_path = if cwd_config.exists() {
-        cwd_config
-    } else if exe_config.exists() {
-        exe_config
-    } else if cwd.join("Cargo.toml").exists() {
-        cwd_config
-    } else {
-        exe_config
-    };
-    let _ = load_or_init_config(&config_path);
+    // If config does not exist next to the executable, copy it over from workspace / CWD
+    if !exe_config.exists() {
+        let mut source_config = None;
+        if cwd.join("config.toml").exists() {
+            source_config = Some(cwd.join("config.toml"));
+        } else if let Some(parent) = cwd.parent() {
+            let p_cfg = parent.join("config.toml");
+            if p_cfg.exists() {
+                source_config = Some(p_cfg);
+            }
+        }
+        if let Some(src) = source_config {
+            if let Ok(content) = std::fs::read(&src) {
+                let _ = std::fs::write(&exe_config, content);
+                crate::log_info!("config", "Copied workspace config from {:?} to executable directory {:?}", src, exe_config);
+            }
+        }
+    }
+
+    let config_path = exe_config;
+
+    crate::log_info!("config", "Resolved application config path: {:?}", config_path);
+    let initial_cfg = load_or_init_config(&config_path);
 
     // Ensure .ssh directory exists
     let base_dir = config_path.parent().unwrap_or(Path::new("."));
@@ -1884,18 +2652,36 @@ pub fn run() {
 
     let mesh_state = mesh::MeshState::default();
 
+    let app_state = AppState {
+        pty_sessions: Arc::new(Mutex::new(HashMap::new())),
+        config_path: config_path.clone(),
+        ssh_pool: ssh::SshSessionPool::new(),
+        docker_cpu_samples: Arc::new(Mutex::new(HashMap::new())),
+        active_tunnels: Arc::new(Mutex::new(HashMap::new())),
+        mesh: Arc::new(mesh_state.clone()),
+        mcp_handle: Arc::new(Mutex::new(None)),
+    };
+
+    if initial_cfg.settings.enable_mcp_server {
+        let port = initial_cfg.settings.mcp_server_port;
+        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+        let state_clone = app_state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = mcp::start_mcp_server(state_clone, port, shutdown_rx).await {
+                crate::log_error!("mcp", "MCP server error on port {}: {}", port, e);
+            }
+        });
+        *app_state.mcp_handle.lock().unwrap() = Some(mcp::McpServerHandle {
+            port,
+            shutdown_tx,
+        });
+        crate::log_info!("mcp", "MCP server listening at http://127.0.0.1:{}/mcp", port);
+    }
+
     tauri::Builder::default()
-        .manage(AppState {
-            pty_sessions: Mutex::new(HashMap::new()),
-            config_path,
-            ssh_pool: ssh::SshSessionPool::new(),
-            docker_cpu_samples: Mutex::new(HashMap::new()),
-            active_tunnels: Mutex::new(HashMap::new()),
-            mesh: Arc::new(mesh_state.clone()),
-        })
+        .manage(app_state)
         .manage(mesh_state)
         .invoke_handler(tauri::generate_handler![
-            get_telemetry,
             get_remote_telemetry,
             read_local_file,
             write_local_file,
@@ -1909,7 +2695,6 @@ pub fn run() {
             window_minimize,
             window_maximize,
             window_close,
-            window_is_maximized,
             get_config,
             save_config,
             add_host,
@@ -1918,6 +2703,7 @@ pub fn run() {
             pty_write,
             pty_resize,
             pty_close,
+            ssh_disconnect_host,
             get_clipboard_text,
             write_clipboard_text,
             get_clipboard_files,
@@ -1945,14 +2731,11 @@ pub fn run() {
             mesh::toggle_wireguard_profile_session,
             mesh::get_wireguard_runtime_statuses,
             mesh::get_tailscale_runtime_status,
-            mesh::get_tailscale_endpoint,
             mesh::get_netbird_runtime_status,
-            mesh::get_netbird_endpoint,
             mesh::get_mesh_tunnel_endpoint,
             mesh::toggle_tailscale_session,
             mesh::toggle_netbird_session,
-            mesh::get_active_mesh_session,
-            mesh::disconnect_all_mesh_sessions,
+            mesh::get_active_mesh_sessions,
             mesh::open_mesh_auth_portal,
             launch_url_in_browser,
             docker::check_docker_available,
@@ -1962,6 +2745,7 @@ pub fn run() {
             ports::get_port_inspection,
             editor::discover_external_editors,
             editor::open_in_external_editor,
+            editor::open_in_native_explorer,
             cloud::check_cloud_auth,
             cloud::save_cloud_credentials,
             cloud::get_cloud_credentials,
@@ -1973,274 +2757,28 @@ pub fn run() {
             logs::log_webview_event,
             logs::clear_app_logs,
             logs::export_app_logs_text,
+            importer::detect_all_importable_hosts,
+            importer::parse_imported_host_file,
+            archive::inspect_archive,
+            get_mcp_status,
+            toggle_mcp_server,
+            wsl_get_status,
+            wsl_start_distro,
+            wsl_stop_distro,
+            wsl_shutdown_all,
+            wsl_install_distro,
+            wsl_unregister_distro,
+            wsl_add_to_hosts,
+            wsl_get_available_distros,
+            wsl_import_distro,
+            save_terminal_theme,
+            load_all_terminal_themes,
+            icons::get_host_icons,
+            icons::trim_memory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Taris application");
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::editor::discover_external_editors;
-    use crate::docker::query_docker_remote;
-    use crate::ports::parse_proc_net_entries;
-
-    #[test]
-    fn test_telemetry_connect() {
-        let host = HostConfig {
-            id: "test".into(),
-            name: "GMKtec".into(),
-            host: "192.168.0.3".into(),
-            port: 22,
-            user: "gmktec".into(),
-            auth_type: "password".into(),
-            key_path: None,
-            password: Some("gmktec".into()),
-            has_docker: true,
-            icon: "".into(),
-            docker_port: None,
-            enable_port_scan: true,
-            mac_address: None,
-            cloud_provider: None,
-            cloud_project_id: None,
-            cloud_zone: None,
-            cloud_instance_id: None,
-            network_route: None,
-        };
-        let res = open_ssh2_session(&host);
-        assert!(res.is_ok());
-    }
-
-    #[test]
-    fn test_editor_discovery() {
-        let editors = discover_external_editors();
-        println!("Discovered editors: {:?}", editors);
-        assert!(!editors.is_empty(), "Should discover at least Notepad or Zed");
-    }
-
-    #[test]
-    fn test_is_command_in_path() {
-        #[cfg(target_os = "windows")]
-        {
-            assert!(is_command_in_path("cmd"), "cmd should be in PATH on Windows");
-            assert!(is_command_in_path("cmd.exe"), "cmd.exe should be in PATH on Windows");
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            assert!(is_command_in_path("sh"), "sh should be in PATH on Unix");
-        }
-    }
-
-    #[test]
-    fn test_clipboard_reader() {
-        let res = get_clipboard_files();
-        assert!(res.is_ok());
-    }
-
-    #[test]
-    fn test_clipboard_text() {
-        let sample = "Taris clipboard integration test";
-        let write_res = write_clipboard_text(sample.to_string());
-        assert!(write_res.is_ok());
-        let read_res = get_clipboard_text();
-        assert!(read_res.is_ok());
-        assert_eq!(read_res.unwrap(), sample);
-    }
-
-    #[test]
-    fn test_delete_local_file_and_dir() {
-        let temp_dir = std::env::temp_dir().join("taris_delete_test");
-        let _ = std::fs::create_dir_all(&temp_dir);
-        let test_file = temp_dir.join("temp_to_delete.txt");
-        std::fs::write(&test_file, "hello delete").unwrap();
-        assert!(test_file.exists());
-
-        let res = delete_local_file(test_file.to_string_lossy().to_string());
-        assert!(res.is_ok());
-        assert!(!test_file.exists());
-
-        let sub_dir = temp_dir.join("sub_folder");
-        std::fs::create_dir_all(&sub_dir).unwrap();
-        std::fs::write(sub_dir.join("child.txt"), "child data").unwrap();
-        assert!(sub_dir.exists());
-
-        let res_dir = delete_local_file(sub_dir.to_string_lossy().to_string());
-        assert!(res_dir.is_ok());
-        assert!(!sub_dir.exists());
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn test_remote_docker_and_ports() {
-        let host = HostConfig {
-            id: "test".into(),
-            name: "GMKtec".into(),
-            host: "192.168.0.3".into(),
-            port: 22,
-            user: "gmktec".into(),
-            auth_type: "password".into(),
-            key_path: None,
-            password: Some("gmktec".into()),
-            has_docker: true,
-            icon: "".into(),
-            docker_port: Some(2375),
-            enable_port_scan: true,
-            mac_address: None,
-            cloud_provider: None,
-            cloud_project_id: None,
-            cloud_zone: None,
-            cloud_instance_id: None,
-            network_route: None,
-        };
-        let sess = open_ssh2_session(&host).unwrap();
-        // Check REST API query
-        let containers_res = query_docker_remote(&sess, 2375, "GET", "/containers/json?all=1");
-        assert!(containers_res.is_ok());
-        let body = containers_res.unwrap();
-        assert!(body.starts_with('['));
-        println!("Containers JSON returned, length: {}", body.len());
-
-        // Check remote port inspection via SFTP
-        let sftp = sess.sftp().unwrap();
-        let mut sockets = Vec::new();
-        if let Ok(mut f) = sftp.open(Path::new("/proc/net/tcp")) {
-            let mut content = String::new();
-            if f.read_to_string(&mut content).is_ok() {
-                parse_proc_net_entries(&content, "TCP", &mut sockets);
-            }
-        }
-        println!("Remote TCP sockets parsed: {}", sockets.len());
-        assert!(!sockets.is_empty());
-    }
-
-    #[test]
-    fn test_local_netstat2() {
-        use netstat2::*;
-        let af_flags = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
-        let proto_flags = ProtocolFlags::TCP | ProtocolFlags::UDP;
-        let sockets = get_sockets_info(af_flags, proto_flags).unwrap();
-        println!("netstat2 total active sockets found: {}", sockets.len());
-        assert!(!sockets.is_empty());
-        for s in sockets.iter().take(5) {
-            match &s.protocol_socket_info {
-                ProtocolSocketInfo::Tcp(tcp) => {
-                    println!("  TCP {}:{} -> {}:{} State: {:?} PIDs: {:?}", tcp.local_addr, tcp.local_port, tcp.remote_addr, tcp.remote_port, tcp.state, s.associated_pids);
-                }
-                ProtocolSocketInfo::Udp(udp) => {
-                    println!("  UDP {}:{} PIDs: {:?}", udp.local_addr, udp.local_port, s.associated_pids);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_snippet_and_icon_cleanup() {
-        let temp_dir = std::env::temp_dir().join("taris_test_icons");
-        let _ = std::fs::create_dir_all(&temp_dir);
-        let config_file = temp_dir.join("config.toml");
-        let ui_icons_dir = temp_dir.join("ui").join("icons");
-        let _ = std::fs::create_dir_all(&ui_icons_dir);
-
-        // Create 2 test icons: 1 used, 1 unused
-        let used_icon_path = ui_icons_dir.join("used_node.svg");
-        let unused_icon_path = ui_icons_dir.join("unused_trash.svg");
-        std::fs::write(&used_icon_path, "<svg>used</svg>").unwrap();
-        std::fs::write(&unused_icon_path, "<svg>unused</svg>").unwrap();
-
-        let hosts = vec![HostConfig {
-            id: "host-1".into(),
-            name: "Server 1".into(),
-            host: "10.0.0.1".into(),
-            port: 22,
-            user: "root".into(),
-            auth_type: "key".into(),
-            key_path: None,
-            password: None,
-            has_docker: false,
-            icon: "icons/used_node.svg".into(),
-            docker_port: None,
-            enable_port_scan: true,
-            mac_address: None,
-            cloud_provider: None,
-            cloud_project_id: None,
-            cloud_zone: None,
-            cloud_instance_id: None,
-            network_route: None,
-        }];
-
-        cleanup_unused_icons(&config_file, &hosts);
-
-        assert!(used_icon_path.exists(), "Used icon should NOT be deleted");
-        assert!(!unused_icon_path.exists(), "Unused icon SHOULD be deleted by cleanup");
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn test_parse_workspace_config() {
-        let content = std::fs::read_to_string("c:\\Users\\Leni\\Desktop\\Projects\\SSH_Term\\config.toml").unwrap();
-        let res = toml::from_str::<AppConfig>(&content);
-        match res {
-            Ok(c) => {
-                println!("SUCCESS! Hosts len = {}", c.hosts.len());
-                assert_eq!(c.settings.app_theme, "one_dark");
-                assert_eq!(c.settings.terminal_theme, "one_dark");
-            }
-            Err(e) => panic!("FAILED TO PARSE: {}", e),
-        }
-    }
-
-    #[test]
-    fn test_theme_and_cursor_settings() {
-        let toml_str = r#"
-            font_family = "Cascadia Code"
-            font_size = 14
-            theme = "dracula"
-            app_theme = "tokyo_night"
-            terminal_theme = "nord"
-            default_shell = "powershell"
-            cursor_blink = true
-        "#;
-        let s: SettingsConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(s.app_theme, "tokyo_night");
-        assert_eq!(s.terminal_theme, "nord");
-        assert_eq!(s.theme, "dracula");
-        assert_eq!(s.enable_multiplexing, true);
-        assert_eq!(s.enable_ssh_compression, false);
-    }
-
-    #[test]
-    fn test_discover_available_shells() {
-        let shells = discover_available_shells();
-        println!("Discovered shells: {:?}", shells);
-        assert!(!shells.is_empty(), "Should discover at least one shell");
-        let has_ps = shells.iter().any(|s| s.id == "powershell");
-        assert!(has_ps, "Should find PowerShell");
-        let has_git_bash = shells.iter().any(|s| s.id == "git-bash");
-        if find_git_bash().is_some() {
-            assert!(has_git_bash, "Should detect Git Bash if it is installed on system");
-        }
-    }
-
-    #[test]
-    fn test_ssh_key_permissions() {
-        let temp_dir = std::env::temp_dir().join("taris_perm_test");
-        let _ = std::fs::create_dir_all(&temp_dir);
-        let test_key = temp_dir.join("test_dummy_key.pem");
-        std::fs::write(&test_key, "dummy key content").unwrap();
-
-        let path_str = test_key.to_string_lossy().to_string();
-        let check_res = check_ssh_key_permissions(path_str.clone()).unwrap();
-        assert!(check_res.exists);
-
-        let fix_res = fix_ssh_key_permissions(path_str.clone()).unwrap();
-        assert!(fix_res.exists);
-        assert!(!fix_res.too_open, "Permissions must be secured after fix: {}", fix_res.details);
-
-        let _ = std::fs::remove_file(test_key);
-        let _ = std::fs::remove_dir_all(temp_dir);
-    }
-}
 
 

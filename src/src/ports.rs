@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::io::Read;
 use crate::{AppState, HostConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,21 +119,11 @@ pub async fn get_port_inspection(
         if !h.enable_port_scan {
             return Ok(PortInspectionResult { sockets: vec![] });
         }
-        let sess = state.take_ssh_session(&h)?;
+        let handle = state.get_russh_session(&h).await?;
         let mut sockets = Vec::new();
 
-        let query_res = (|| -> Result<String, String> {
-            let mut ch = sess.channel_session().map_err(|e| format!("Channel error: {}", e))?;
-            ch.exec("cat /proc/net/tcp 2>/dev/null; echo '---TCP6---'; cat /proc/net/tcp6 2>/dev/null; echo '---UDP---'; cat /proc/net/udp 2>/dev/null; echo '---UDP6---'; cat /proc/net/udp6 2>/dev/null")
-                .map_err(|e| format!("Exec error: {}", e))?;
-            let mut out = String::new();
-            ch.read_to_string(&mut out).map_err(|e| format!("Read error: {}", e))?;
-            let _ = ch.wait_close();
-            Ok(out)
-        })();
-
-        if let Ok(content) = query_res {
-            state.return_ssh_session(&h, sess);
+        let cmd = "cat /proc/net/tcp 2>/dev/null; echo '---TCP6---'; cat /proc/net/tcp6 2>/dev/null; echo '---UDP---'; cat /proc/net/udp 2>/dev/null; echo '---UDP6---'; cat /proc/net/udp6 2>/dev/null";
+        if let Ok(content) = crate::ssh::client::exec_command(&handle, cmd).await {
             let mut parts = content.split("---TCP6---");
             if let Some(tcp) = parts.next() {
                 parse_proc_net_entries(tcp, "TCP", &mut sockets);

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A blazing-fast GPU-accelerated Homelab & SSH Studio"
 authors = ["Leni"]
 edition = "2021"
+build = "build.rs"
 
 [lib]
 name = "taris_lib"
@@ -22,10 +23,22 @@ portable-pty = "0.8"
 toml = "0.8"
 rusqlite = { version = "0.31", features = ["bundled"] }
 base64 = "0.22"
-ssh2 = "0.9"
 netstat2 = "0.11"
 tokio = { version = "1", features = ["net", "sync", "rt", "io-util", "macros"] }
 
 rfd = "0.15"
 boringtun = "0.7.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "default-tls"] }
+russh = { version = "0.63", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-keys = "0.49"
+russh-sftp = "3.0"
+
+# Phase 9 additions: Archives, ZMODEM, Mosh & Importer
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1.0"
+sevenz-rust = "0.6"
+crc = "3.2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
