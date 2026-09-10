@@ -163,6 +163,7 @@ pub async fn open_in_external_editor(
         if parts.is_empty() {
             return Err("External editor command is empty".into());
         }
+        #[allow(unused_mut)]
         let mut executable = parts[0].clone();
         if !is_command_in_path(&executable) && !Path::new(&executable).exists() {
             #[cfg(target_os = "windows")]

@@ -28,20 +28,14 @@ jobs:
           - name: Windows (x86_64)
             os: windows-latest
             artifact_name: taris-windows-x86_64.zip
-            script: cmd /c build.bat
-            archive_cmd: Compress-Archive -Path output/* -DestinationPath taris-windows-x86_64.zip
 
           - name: Linux (x86_64)
             os: ubuntu-22.04
             artifact_name: taris-linux-x86_64.tar.gz
-            script: chmod +x build.sh && ./build.sh
-            archive_cmd: tar -czvf taris-linux-x86_64.tar.gz -C output .
 
           - name: macOS (Universal)
             os: macos-latest
             artifact_name: taris-macos-universal.tar.gz
-            script: chmod +x build.sh && ./build.sh
-            archive_cmd: tar -czvf taris-macos-universal.tar.gz -C output .
 
     steps:
       - name: Checkout repository
@@ -75,24 +69,27 @@ jobs:
             .
             src
 
-      - name: Run Build & Package Script
-        shell: bash
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cmd.exe /c build.bat
-          else
-            chmod +x build.sh
-            ./build.sh
-          fi
+      - name: Run Build & Package Script (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: build.bat
 
-      - name: Create Release Archive
+      - name: Run Build & Package Script (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            powershell -NoProfile -Command "Compress-Archive -Path output\* -DestinationPath ${{ matrix.platform.artifact_name }} -Force"
-          else
-            tar -czvf "${{ matrix.platform.artifact_name }}" -C output .
-          fi
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Create Release Archive (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: tar -a -cf "${{ matrix.platform.artifact_name }}" -C output .
+
+      - name: Create Release Archive (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: tar -czvf "${{ matrix.platform.artifact_name }}" -C output .
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4

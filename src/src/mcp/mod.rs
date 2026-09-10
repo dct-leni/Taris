@@ -339,14 +339,14 @@ async fn execute_mcp_tool(state: &AppState, tool_name: &str, args: &Value) -> Re
             }
         }
         "add_wsl_distro" => {
-            let distro = args.get("distro_name").and_then(|v| v.as_str()).ok_or("Missing 'distro_name'")?;
+            let _distro = args.get("distro_name").and_then(|v| v.as_str()).ok_or("Missing 'distro_name'")?;
             #[cfg(windows)]
             {
                 std::process::Command::new("wsl.exe")
-                    .args(["--install", distro, "--no-launch"])
+                    .args(["--install", _distro, "--no-launch"])
                     .spawn()
                     .map_err(|e| format!("Failed to spawn wsl installation: {}", e))?;
-                Ok(format!("Triggered installation for WSL distribution '{}'.", distro))
+                Ok(format!("Triggered installation for WSL distribution '{}'.", _distro))
             }
             #[cfg(not(windows))]
             {

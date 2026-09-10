@@ -1,7 +1,9 @@
 use crate::HostConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Instant;
+#[cfg(windows)]
+use std::time::Duration;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 

@@ -2611,6 +2611,7 @@ pub fn run() {
         }
     }
 
+    #[cfg(debug_assertions)]
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let exe_dir = std::env::current_exe()
         .map(|p| p.parent().unwrap_or(Path::new(".")).to_path_buf())
