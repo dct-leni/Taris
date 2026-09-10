@@ -123,26 +123,10 @@ if [ -d "$SCRIPT_DIR/ui/themes" ]; then
     echo "  [+] Copied terminal theme palettes (themes/)"
 fi
 
-# 9. Copy documentation
-if [ -f "$SCRIPT_DIR/README.md" ]; then
-    cp "$SCRIPT_DIR/README.md" "$OUTPUT_DIR/README.md"
-    echo "  [+] Copied README.md"
-fi
-
 # 10. Ensure .ssh directory exists
 mkdir -p "$OUTPUT_DIR/.ssh"
 chmod 700 "$OUTPUT_DIR/.ssh" 2>/dev/null || true
 echo "  [+] Initialized .ssh directory"
-
-# 11. Create helper launcher script
-cat <<'EOF' > "$OUTPUT_DIR/run.sh"
-#!/usr/bin/env bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
-exec ./taris "$@"
-EOF
-chmod +x "$OUTPUT_DIR/run.sh"
-echo "  [+] Created run.sh launcher"
 
 echo
 echo "========================================================"
