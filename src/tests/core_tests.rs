@@ -12,13 +12,13 @@ use taris_lib::{
 async fn test_open_russh_session() {
     let host = HostConfig {
         id: "test".into(),
-        name: "GMKtec".into(),
-        host: "192.168.0.3".into(),
+        name: "test-server".into(),
+        host: "127.0.0.1".into(),
         port: 22,
-        user: "gmktec".into(),
+        user: "testuser".into(),
         auth_type: "password".into(),
         key_path: None,
-        password: Some("gmktec".into()),
+        password: Some("testpass".into()),
         has_docker: true,
         icon: "".into(),
         docker_port: None,
@@ -112,13 +112,13 @@ fn test_delete_local_file_and_dir() {
 async fn test_remote_docker_and_ports() {
     let host = HostConfig {
         id: "test".into(),
-        name: "GMKtec".into(),
-        host: "192.168.0.3".into(),
+        name: "test-server".into(),
+        host: "127.0.0.1".into(),
         port: 22,
-        user: "gmktec".into(),
+        user: "testuser".into(),
         auth_type: "password".into(),
         key_path: None,
-        password: Some("gmktec".into()),
+        password: Some("testpass".into()),
         has_docker: true,
         icon: "".into(),
         docker_port: Some(2375),
@@ -209,7 +209,11 @@ fn test_snippet_and_icon_cleanup() {
 
 #[test]
 fn test_parse_workspace_config() {
-    let content = std::fs::read_to_string("c:\\Users\\Leni\\Desktop\\Projects\\SSH_Term\\config.toml").unwrap();
+    let content = if std::path::Path::new("config.example.toml").exists() {
+        std::fs::read_to_string("config.example.toml").unwrap()
+    } else {
+        include_str!("../../config.example.toml").to_string()
+    };
     let res = toml::from_str::<AppConfig>(&content);
     match res {
         Ok(c) => {

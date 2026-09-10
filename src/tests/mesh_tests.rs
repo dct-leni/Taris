@@ -92,7 +92,7 @@ async fn test_netbird_setup_key_status() {
 #[tokio::test]
 async fn test_netbird_forwarder_bind() {
     let candidates = vec!["127.0.0.1:9".to_string()];
-    let res = taris_lib::mesh::netbird::start_netbird_forwarder("100.120.57.28".to_string(), 22, Some(1085), candidates).await;
+    let res = taris_lib::mesh::netbird::start_netbird_forwarder("100.64.0.1".to_string(), 22, Some(1085), candidates).await;
     assert!(res.is_ok());
     let port = res.unwrap();
     assert!(port > 0);
