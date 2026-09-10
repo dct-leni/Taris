@@ -50,7 +50,7 @@ fn default_host_icon() -> String {
 
 
 fn default_scrollback() -> u32 {
-    10000
+    2500
 }
 
 fn default_theme() -> String {
@@ -2619,21 +2619,25 @@ pub fn run() {
     // The application config is strictly adjacent to the executable
     let exe_config = exe_dir.join("config.toml");
 
-    // If config does not exist next to the executable, copy it over from workspace / CWD
+    // In dev mode (cargo run), copy workspace config if target/debug config doesn't exist yet
+    #[cfg(debug_assertions)]
     if !exe_config.exists() {
-        let mut source_config = None;
-        if cwd.join("config.toml").exists() {
-            source_config = Some(cwd.join("config.toml"));
-        } else if let Some(parent) = cwd.parent() {
-            let p_cfg = parent.join("config.toml");
-            if p_cfg.exists() {
-                source_config = Some(p_cfg);
+        let is_in_target = exe_dir.to_string_lossy().contains("target");
+        if is_in_target {
+            let mut source_config = None;
+            if cwd.join("config.toml").exists() {
+                source_config = Some(cwd.join("config.toml"));
+            } else if let Some(parent) = cwd.parent() {
+                let p_cfg = parent.join("config.toml");
+                if p_cfg.exists() {
+                    source_config = Some(p_cfg);
+                }
             }
-        }
-        if let Some(src) = source_config {
-            if let Ok(content) = std::fs::read(&src) {
-                let _ = std::fs::write(&exe_config, content);
-                crate::log_info!("config", "Copied workspace config from {:?} to executable directory {:?}", src, exe_config);
+            if let Some(src) = source_config {
+                if let Ok(content) = std::fs::read(&src) {
+                    let _ = std::fs::write(&exe_config, content);
+                    crate::log_info!("config", "Copied dev workspace config from {:?} to executable directory {:?}", src, exe_config);
+                }
             }
         }
     }

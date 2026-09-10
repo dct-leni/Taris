@@ -1,0 +1,79 @@
+wireguard_profiles = []
+
+[settings]
+font_family = "Cascadia Code"
+font_size = 14
+app_font_size = 13
+theme = "one_dark"
+app_theme = "one_dark"
+terminal_theme = "one_dark"
+default_shell = "powershell"
+cursor_style = "block"
+docker_port = 2375
+drawer_width = 240
+sidebar_width = 310
+sftp_col_date_width = 105
+sftp_col_size_width = 55
+scrollback = 2500
+enable_multiplexing = true
+enable_ssh_compression = false
+enable_app_logs = false
+enable_mcp_server = false
+mcp_server_port = 8765
+
+[settings.custom_themes]
+
+[[snippets]]
+id = "snip-1"
+title = "Docker PS"
+command = "docker ps -a"
+tags = "docker"
+
+[[snippets]]
+id = "snip-2"
+title = "Disk Usage"
+command = "df -h"
+tags = "system"
+
+[[snippets]]
+id = "snip-3"
+title = "Memory Info"
+command = "free -h"
+tags = "system"
+
+[[snippets]]
+id = "snip-4"
+title = "Network Sockets"
+command = "ss -tulpn"
+tags = "network"
+
+[[snippets]]
+id = "snip-5"
+title = "Systemd Logs"
+command = "journalctl -xe -f"
+tags = "logs"
+
+[session]
+active_view = "local"
+active_category = "hosts"
+rail_order = [
+    "hosts",
+    "cloud",
+    "files",
+    "docker",
+    "ports",
+    "snippets",
+    "tunnels",
+    "wireguard",
+]
+show_host_ip = false
+
+[file_explorer]
+col_date = true
+col_size = true
+col_type = false
+col_perms = false
+width_date = 105
+width_size = 55
+width_type = 50
+width_perms = 75

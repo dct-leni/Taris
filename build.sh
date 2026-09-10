@@ -110,13 +110,7 @@ if [ "$OS_NAME" = "Darwin" ]; then
     done
 fi
 
-# 7. Copy configuration file
-if [ -f "$SCRIPT_DIR/config.toml" ]; then
-    cp "$SCRIPT_DIR/config.toml" "$OUTPUT_DIR/config.toml"
-    echo "  [+] Copied config.toml"
-fi
-
-# 8. Copy terminal themes
+# 7. Copy terminal themes
 if [ -d "$SCRIPT_DIR/ui/themes" ]; then
     mkdir -p "$OUTPUT_DIR/themes"
     cp "$SCRIPT_DIR/ui/themes"/*.json "$OUTPUT_DIR/themes/" 2>/dev/null || true

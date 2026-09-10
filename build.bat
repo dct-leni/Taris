@@ -49,19 +49,11 @@ if errorlevel 1 (
 )
 echo   [+] Copied taris.exe
 
-:: 6. Copy configuration file
-if exist "%ROOT%\config.toml" (
-    copy /y "%ROOT%\config.toml" "%OUTPUT_DIR%\config.toml" >nul
-    echo   [+] Copied config.toml
-)
-
-:: 7. Copy terminal theme files (both ui\themes and themes)
+:: 6. Copy terminal theme files
 if exist "%ROOT%\ui\themes" (
-    if not exist "%OUTPUT_DIR%\ui\themes" mkdir "%OUTPUT_DIR%\ui\themes" 2>nul
     if not exist "%OUTPUT_DIR%\themes" mkdir "%OUTPUT_DIR%\themes" 2>nul
-    xcopy /y /q /i "%ROOT%\ui\themes\*.json" "%OUTPUT_DIR%\ui\themes\" >nul 2>&1
     xcopy /y /q /i "%ROOT%\ui\themes\*.json" "%OUTPUT_DIR%\themes\" >nul 2>&1
-    echo   [+] Copied terminal theme palettes (ui\themes\ and themes\)
+    echo   [+] Copied terminal theme palettes (themes\)
 )
 
 :: 8. Copy documentation

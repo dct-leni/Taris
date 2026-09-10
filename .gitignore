@@ -4,3 +4,5 @@ target/
 .ssh/
 output/
 target_test/
+config.toml
+*.bak
