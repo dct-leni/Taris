@@ -56,25 +56,11 @@ if exist "%ROOT%\ui\themes" (
     echo   [+] Copied terminal theme palettes (themes\)
 )
 
-:: 8. Copy documentation
-if exist "%ROOT%\README.md" (
-    copy /y "%ROOT%\README.md" "%OUTPUT_DIR%\README.md" >nul
-    echo   [+] Copied README.md
-)
-
 :: 9. Ensure .ssh directory exists
 if not exist "%OUTPUT_DIR%\.ssh" (
     mkdir "%OUTPUT_DIR%\.ssh" 2>nul
     echo   [+] Initialized .ssh directory
 )
-
-:: 10. Create double-click launcher
-(
-    echo @echo off
-    echo cd /d "%%~dp0"
-    echo start "" "%%~dp0taris.exe"
-) > "%OUTPUT_DIR%\run.bat"
-echo   [+] Created run.bat launcher
 
 echo.
 echo ========================================================

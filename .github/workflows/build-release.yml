@@ -27,15 +27,15 @@ jobs:
         platform:
           - name: Windows (x86_64)
             os: windows-latest
-            artifact_name: taris-windows-x86_64.zip
+            artifact_name: taris-windows-x86_64
 
           - name: Linux (x86_64)
             os: ubuntu-22.04
-            artifact_name: taris-linux-x86_64.tar.gz
+            artifact_name: taris-linux-x86_64
 
           - name: macOS (Universal)
             os: macos-latest
-            artifact_name: taris-macos-universal.tar.gz
+            artifact_name: taris-macos-universal
 
     steps:
       - name: Checkout repository
@@ -81,29 +81,32 @@ jobs:
           chmod +x build.sh
           ./build.sh
 
-      - name: Create Release Archive (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: tar -a -cf "${{ matrix.platform.artifact_name }}" -C output .
-
-      - name: Create Release Archive (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: tar -czvf "${{ matrix.platform.artifact_name }}" -C output .
-
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform.artifact_name }}
-          path: ${{ matrix.platform.artifact_name }}
+          path: output/
           if-no-files-found: error
 
   release:
     name: Publish GitHub Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: Determine Release Metadata
+        id: meta
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+            echo "title=Taris ${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          else
+            echo "tag=latest" >> $GITHUB_OUTPUT
+            echo "title=Taris Rolling Release (${GITHUB_SHA::7})" >> $GITHUB_OUTPUT
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -112,15 +115,25 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p dist
-          find release-artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) -exec cp {} dist/ \;
+          if [ -d "release-artifacts/taris-windows-x86_64" ]; then
+            (cd release-artifacts/taris-windows-x86_64 && zip -r ../../dist/taris-windows-x86_64.zip .)
+          fi
+          if [ -d "release-artifacts/taris-linux-x86_64" ]; then
+            tar -czvf dist/taris-linux-x86_64.tar.gz -C release-artifacts/taris-linux-x86_64 .
+          fi
+          if [ -d "release-artifacts/taris-macos-universal" ]; then
+            tar -czvf dist/taris-macos-universal.tar.gz -C release-artifacts/taris-macos-universal .
+          fi
           ls -la dist/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.title }}
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
           files: dist/*
           generate_release_notes: true
           draft: false
-          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
