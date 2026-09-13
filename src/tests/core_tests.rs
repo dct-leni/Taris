@@ -30,6 +30,7 @@ async fn test_open_russh_session() {
         cloud_instance_id: None,
         network_route: None,
         protocol: None,
+        auto_reconnect: false,
     };
     let _ = open_russh_session(&host).await;
 }
@@ -130,6 +131,7 @@ async fn test_remote_docker_and_ports() {
         cloud_instance_id: None,
         network_route: None,
         protocol: None,
+        auto_reconnect: false,
     };
     if let Ok(handle) = open_russh_session(&host).await {
         let containers_res = query_docker_remote(&handle, 2375, "GET", "/containers/json?all=1").await;
@@ -197,6 +199,7 @@ fn test_snippet_and_icon_cleanup() {
         cloud_instance_id: None,
         network_route: None,
         protocol: None,
+        auto_reconnect: false,
     }];
 
     cleanup_unused_icons(&config_file, &hosts);

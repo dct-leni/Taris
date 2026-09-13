@@ -424,38 +424,56 @@ pub async fn start_netbird_forwarder(
                             .await;
 
                             if let Ok(Ok(mut outbound)) = socks_res {
+                                let _ = inbound.set_nodelay(true);
+                                let _ = outbound.set_nodelay(true);
                                 crate::log_info!("mesh", "Bridged connection from {} to NetBird target {}:{} via SOCKS5 proxy (port {})", client_addr, th, tp, proxy_port);
                                 let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
                                 return;
                             }
 
                             if let Ok(Err(ref e)) = socks_res {
-                                crate::log_warn!("mesh", "SOCKS5 connect failed on port {} for {}:{}: {}, falling back to direct route", proxy_port, th, tp, e);
+                                crate::log_warn!("mesh", "NetBird Kill-Switch: SOCKS5 connect failed on port {} for {}:{}: {}", proxy_port, th, tp, e);
                             }
                         }
 
-                        // 2. Connect directly to candidate endpoints (e.g. 100.x.x.x overlay IP or LAN IP)
-                        // If official NetBird client is installed and connected on the machine,
-                        // the OS routing table routes 100.x.x.x through the NetBird virtual interface.
+                        // 2. Overlay endpoints only (NetBird CGNAT 100.64.0.0/10)
+                        // Never dial arbitrary public IPs or domain names directly outside the mesh
                         for target in cand_list.iter() {
-                            let connect_res = tokio::time::timeout(
-                                Duration::from_millis(2500),
-                                TcpStream::connect(target),
-                            )
-                            .await;
-
-                            if let Ok(Ok(mut outbound)) = connect_res {
-                                crate::log_info!("mesh", "Bridged connection from {} to NetBird target {} directly", client_addr, target);
-                                let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
-                                return;
+                            let is_overlay_ip = if let Some(ip_str) = target.split(':').next() {
+                                if let Ok(ip) = ip_str.parse::<std::net::Ipv4Addr>() {
+                                    let octets = ip.octets();
+                                    octets[0] == 100 && (octets[1] >= 64 && octets[1] <= 127)
+                                } else {
+                                    false
+                                }
                             } else {
-                                crate::log_warn!("mesh", "Candidate {} failed for {}: {:?}", target, client_addr, connect_res);
+                                false
+                            };
+
+                            if is_overlay_ip {
+                                let connect_res = tokio::time::timeout(
+                                    Duration::from_millis(2500),
+                                    TcpStream::connect(target),
+                                )
+                                .await;
+
+                                if let Ok(Ok(mut outbound)) = connect_res {
+                                    let _ = inbound.set_nodelay(true);
+                                    let _ = outbound.set_nodelay(true);
+                                    crate::log_info!("mesh", "Bridged connection from {} to NetBird target {} via overlay interface", client_addr, target);
+                                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                                    return;
+                                } else {
+                                    crate::log_warn!("mesh", "NetBird Kill-Switch: Overlay endpoint {} failed for {}: {:?}", target, client_addr, connect_res);
+                                }
+                            } else {
+                                crate::log_warn!("mesh", "NetBird Kill-Switch: Refusing direct connection to non-overlay endpoint {} to prevent cleartext leak", target);
                             }
                         }
 
                         crate::log_error!(
                             "mesh",
-                            "All endpoints ({:?}) failed for NetBird forwarder. Is official NetBird client running?",
+                            "NetBird Kill-Switch: All NetBird mesh endpoints ({:?}) failed. Direct connection blocked to prevent cleartext leak.",
                             cand_list
                         );
                     });

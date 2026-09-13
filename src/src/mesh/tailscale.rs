@@ -385,6 +385,8 @@ pub async fn start_tailscale_forwarder(
                                                 };
 
                                                 if drain_ok {
+                                                    let _ = inbound.set_nodelay(true);
+                                                    let _ = proxy_stream.set_nodelay(true);
                                                     crate::log_info!(
                                                         "mesh",
                                                         "Bridged connection from {} to Tailscale target {} via SOCKS5 proxy",
@@ -398,38 +400,67 @@ pub async fn start_tailscale_forwarder(
                                         }
                                     }
                                 }
-                            }
-
-                            // 2. Direct fallback for candidate
-                            let connect_res = tokio::time::timeout(
-                                Duration::from_millis(1500),
-                                TcpStream::connect(target),
-                            )
-                            .await;
-
-                            if let Ok(Ok(mut direct_stream)) = connect_res {
-                                crate::log_info!(
+                                crate::log_warn!(
                                     "mesh",
-                                    "Bridged connection from {} to Tailscale target {} directly",
-                                    client_addr,
+                                    "Tailscale SOCKS5 proxy at {} rejected or unavailable for candidate {}",
+                                    proxy_addr,
                                     target
                                 );
-                                let _ = tokio::io::copy_bidirectional(&mut inbound, &mut direct_stream).await;
-                                return;
+                            }
+
+                            // 2. If target is a verified Tailscale overlay endpoint (CGNAT 100.64.0.0/10, fd7a:115c:a1e0::/48, or *.ts.net),
+                            // connect directly through the local Tailscale virtual network interface (WinTun / TUN).
+                            let parts: Vec<&str> = target.split(':').collect();
+                            let tip = parts[0];
+                            let is_overlay = if let Ok(ip4) = tip.parse::<std::net::Ipv4Addr>() {
+                                let oct = ip4.octets();
+                                oct[0] == 100 && (oct[1] >= 64 && oct[1] <= 127)
+                            } else if let Ok(ip6) = tip.parse::<std::net::Ipv6Addr>() {
+                                let seg = ip6.segments();
+                                seg[0] == 0xfd7a && seg[1] == 0x115c && seg[2] == 0xa1e0
+                            } else {
+                                tip.ends_with(".ts.net") || tip.ends_with(".beta.tailscale.net")
+                            };
+
+                            if is_overlay {
+                                let connect_res = tokio::time::timeout(
+                                    Duration::from_millis(2500),
+                                    TcpStream::connect(target),
+                                )
+                                .await;
+
+                                if let Ok(Ok(mut direct_stream)) = connect_res {
+                                    let _ = inbound.set_nodelay(true);
+                                    let _ = direct_stream.set_nodelay(true);
+                                    crate::log_info!(
+                                        "mesh",
+                                        "Bridged connection from {} to Tailscale target {} via overlay network interface",
+                                        client_addr,
+                                        target
+                                    );
+                                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut direct_stream).await;
+                                    return;
+                                } else {
+                                    crate::log_warn!(
+                                        "mesh",
+                                        "Tailscale Kill-Switch: Overlay connection to {} failed for {}: {:?}",
+                                        target,
+                                        client_addr,
+                                        connect_res
+                                    );
+                                }
                             } else {
                                 crate::log_warn!(
                                     "mesh",
-                                    "Candidate {} failed for {}: {:?}",
-                                    target,
-                                    client_addr,
-                                    connect_res
+                                    "Tailscale Kill-Switch: Refusing direct connection to non-overlay endpoint {} to prevent cleartext leak",
+                                    target
                                 );
                             }
                         }
 
                         crate::log_error!(
                             "mesh",
-                            "All candidate endpoints failed for Tailscale forwarder ({:?})",
+                            "Tailscale Kill-Switch: All candidate endpoints failed ({:?}). Direct connection to non-overlay endpoints blocked to prevent cleartext leak.",
                             cand_list
                         );
                     });

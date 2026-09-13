@@ -39,18 +39,23 @@ fn create_test_state() -> (AppState, std::path::PathBuf) {
         cloud_instance_id: None,
         network_route: Some("direct".into()),
         protocol: Some("ssh".into()),
+        auto_reconnect: false,
     });
 
     std::fs::write(&config_path, toml::to_string_pretty(&cfg).unwrap()).unwrap();
 
     let state = AppState {
         pty_sessions: Arc::new(Mutex::new(HashMap::new())),
+        pending_resizes: Arc::new(Mutex::new(HashMap::new())),
         config_path: config_path.clone(),
         ssh_pool: SshSessionPool::new(),
         docker_cpu_samples: Arc::new(Mutex::new(HashMap::new())),
         active_tunnels: Arc::new(Mutex::new(HashMap::new())),
         mesh: Arc::new(taris_lib::mesh::MeshState::default()),
         mcp_handle: Arc::new(Mutex::new(None)),
+        local_system: Arc::new(Mutex::new(sysinfo::System::new())),
+        local_disks: Arc::new(Mutex::new((sysinfo::Disks::new_with_refreshed_list(), std::time::Instant::now()))),
+        remote_disks_cache: Arc::new(Mutex::new(HashMap::new())),
     };
 
     (state, temp_dir)

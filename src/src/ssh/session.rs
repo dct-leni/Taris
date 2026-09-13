@@ -52,17 +52,31 @@ pub async fn open_russh_session_with_handler(
     };
 
     let mut config = client::Config::default();
-    config.keepalive_interval = Some(Duration::from_secs(15));
+    config.keepalive_interval = Some(Duration::from_secs(10));
+    config.keepalive_max = 3;
     let config = Arc::new(config);
 
-    let mut handle = match tokio::time::timeout(Duration::from_secs(10), client::connect(config, socket_addr, handler)).await {
-        Ok(res) => res.map_err(|e| {
+    let tcp_stream = match tokio::time::timeout(Duration::from_secs(10), tokio::net::TcpStream::connect(socket_addr)).await {
+        Ok(Ok(stream)) => {
+            let _ = stream.set_nodelay(true);
+            stream
+        }
+        Ok(Err(e)) => {
             let msg = format!("SSH transport connection failed to {}: {}", addr_str, e);
             crate::log_error!("ssh", "{}", msg);
-            msg
-        })?,
+            return Err(msg);
+        }
         Err(_) => {
             let msg = format!("SSH transport connection timed out to {}", addr_str);
+            crate::log_error!("ssh", "{}", msg);
+            return Err(msg);
+        }
+    };
+
+    let mut handle = match client::connect_stream(config, tcp_stream, handler).await {
+        Ok(h) => h,
+        Err(e) => {
+            let msg = format!("SSH transport handshake failed to {}: {}", addr_str, e);
             crate::log_error!("ssh", "{}", msg);
             return Err(msg);
         }

@@ -786,6 +786,7 @@ pub async fn get_mesh_tunnel_endpoint(
         cloud_instance_id: None,
         network_route: Some("mesh".into()),
         protocol: None,
+        auto_reconnect: false,
     });
 
     if let Some(th) = target_host_override {

@@ -579,6 +579,11 @@
         <span class="titlebar-divider">|</span>
         <div class="stat-item"><span class="stat-label">RAM:</span><span id="footer-ram" class="stat-val">--</span></div>
         <span class="titlebar-divider">|</span>
+        <div class="stat-item" id="footer-disk-box" title="Disk Free Space">
+          <span class="stat-label">Disk:</span>
+          <span id="footer-disk-val" class="stat-val">--</span>
+        </div>
+        <span class="titlebar-divider">|</span>
         <div class="stat-item">
           <span class="stat-label">Net:</span>
           <div id="footer-net-box" class="status-net-box">
@@ -685,6 +690,10 @@
           <div class="form-group checkbox-row">
             <input type="checkbox" id="host-form-port-scan" checked>
             <label for="host-form-port-scan">Enable Port Scanner for this host</label>
+          </div>
+          <div class="form-group checkbox-row">
+            <input type="checkbox" id="host-form-auto-reconnect">
+            <label for="host-form-auto-reconnect"><i class="fa" style="color: var(--accent); margin-right: 2px;">&#xf01e;</i> Enable infinite auto-reconnect on connection drop / failure (retries every 30s)</label>
           </div>
           <div class="form-group" style="margin-top: 8px;">
             <label for="host-form-mac">MAC Address (for Wake-on-LAN)</label>
@@ -1228,28 +1237,7 @@ PersistentKeepalive = 25"></textarea>
       </div>
     </div>
 
-  <!-- Custom Terminal Context Menu (Controlled Right-Click) -->
-  <div id="terminal-context-menu" class="context-menu hidden">
-    <div class="context-menu-item" id="ctx-menu-copy">
-      <i class="fa">&#xf0c5;</i>
-      <span>Copy</span>
-      <span class="context-menu-shortcut">Ctrl+C</span>
-    </div>
-    <div class="context-menu-item" id="ctx-menu-paste">
-      <i class="fa">&#xf0ea;</i>
-      <span>Paste</span>
-      <span class="context-menu-shortcut">Ctrl+V</span>
-    </div>
-    <div class="context-menu-divider"></div>
-    <div class="context-menu-item" id="ctx-menu-select-all">
-      <i class="fa">&#xf24d;</i>
-      <span>Select All</span>
-    </div>
-    <div class="context-menu-item" id="ctx-menu-clear">
-      <i class="fa">&#xf1f8;</i>
-      <span>Clear Terminal</span>
-    </div>
-  </div>
+
 
   <!-- Custom SFTP Context Menu (Files & Folders) -->
   <div id="sftp-context-menu" class="context-menu hidden">

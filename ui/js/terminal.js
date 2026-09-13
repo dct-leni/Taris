@@ -316,6 +316,66 @@ function extractPathFromOsc7(data) {
   return path.trim() || null;
 }
 
+// ── Infinite Auto-Reconnect Manager for Host Sessions ──
+function triggerAutoReconnect(sessionId, reason) {
+  const s = terminalSessions[sessionId];
+  if (!s || !s.host || !s.host.auto_reconnect) return;
+  if (s.isReconnecting) return;
+
+  s.connected = false;
+  s.isReconnecting = true;
+  s.reconnectSecondsLeft = 30;
+
+  // Update tab & host status dots to show reconnecting state
+  if (typeof updateTabStatusDots === 'function') updateTabStatusDots();
+  if (typeof updateHostStatusDots === 'function') updateHostStatusDots();
+
+  const reasonStr = typeof reason === 'string' ? reason : (reason?.message || 'Connection lost');
+  s.term.write(`\r\n\x1b[33m[Connection dropped: ${reasonStr}]\x1b[0m\r\n`);
+  s.term.write(`\x1b[36m[Auto-reconnect] Retrying in ${s.reconnectSecondsLeft}s... (Press Enter to retry now, Ctrl+C to pause, close tab to cancel)\x1b[0m`);
+
+  if (s.reconnectCountdown) {
+    clearInterval(s.reconnectCountdown);
+    s.reconnectCountdown = null;
+  }
+
+  s.reconnectCountdown = setInterval(() => {
+    if (!terminalSessions[sessionId] || !document.getElementById(s.containerId)) {
+      clearInterval(s.reconnectCountdown);
+      s.reconnectCountdown = null;
+      return;
+    }
+
+    s.reconnectSecondsLeft--;
+    if (s.reconnectSecondsLeft > 0) {
+      s.term.write(`\r\x1b[2K\x1b[36m[Auto-reconnect] Retrying in ${s.reconnectSecondsLeft}s... (Press Enter to retry now, Ctrl+C to pause, close tab to cancel)\x1b[0m`);
+    } else {
+      clearInterval(s.reconnectCountdown);
+      s.reconnectCountdown = null;
+      executeReconnect(sessionId);
+    }
+  }, 1000);
+}
+
+async function executeReconnect(sessionId) {
+  const s = terminalSessions[sessionId];
+  if (!s || !terminalSessions[sessionId]) return;
+
+  if (s.reconnectCountdown) {
+    clearInterval(s.reconnectCountdown);
+    s.reconnectCountdown = null;
+  }
+
+  s.term.write(`\r\x1b[2K\x1b[33m[Auto-reconnect] Connecting to ${s.host?.name || 'host'}...\x1b[0m\r\n`);
+
+  // Tear down any lingering backend state for this session ID
+  await invoke('pty_close', { sessionId }).catch(() => {});
+
+  if (typeof s.spawnSession === 'function') {
+    s.spawnSession();
+  }
+}
+
 function initTerminalSession(sessionId, containerId, shellType = 'powershell', options = {}) {
   if (terminalSessions[sessionId]) {
     const sess = terminalSessions[sessionId];
@@ -334,22 +394,82 @@ function initTerminalSession(sessionId, containerId, shellType = 'powershell', o
     theme: getXtermTheme(currentTheme),
     fontFamily: appConfig.settings.font_family || 'Cascadia Code',
     fontSize: parseInt(appConfig.settings.font_size) || 14,
-    lineHeight: 1.3,
-    cursorBlink: false,
+    lineHeight: parseFloat(appConfig.settings.line_height) || 1.0,
+    cursorBlink: appConfig.settings.cursor_blink !== false,
     cursorStyle: appConfig.settings.cursor_style || 'block',
     allowTransparency: true,
-    convertEol: true,
-    scrollback: parseInt(appConfig.settings.scrollback) || 2500,
+    convertEol: false,
+    scrollback: parseInt(appConfig.settings.scrollback) || 5000,
   });
 
   const fitAddon = new window.FitAddon.FitAddon();
   term.loadAddon(fitAddon);
   term.open(container);
 
+  // Synchronously fit dimensions right after open so pty_spawn receives actual cols/rows
+  if (container.clientWidth > 50 && container.clientHeight > 50) {
+    try {
+      fitAddon.fit();
+    } catch (_) {}
+  }
+
   setTimeout(() => {
     resizeSession({ term, fitAddon, containerId });
     term.focus();
-  }, 60);
+  }, 30);
+
+  // ResizeObserver: Automatically re-fits terminal when sidebar drawer toggles or layout shifts
+  let resizeObserver = null;
+  if (typeof window.ResizeObserver === 'function') {
+    resizeObserver = new ResizeObserver(() => {
+      if (container.clientWidth > 50 && container.clientHeight > 50) {
+        try {
+          fitAddon.fit();
+        } catch (_) {}
+      }
+    });
+    resizeObserver.observe(container);
+  }
+
+  // Native Copy-on-Select: Highlighted text is automatically copied to system clipboard
+  term.onSelectionChange(() => {
+    if (term.hasSelection()) {
+      const sel = term.getSelection();
+      if (sel && sel.length > 0) {
+        setSystemClipboardText(sel);
+      }
+    }
+  });
+
+  // Native Right-Click handler: If text selected, copy & clear; otherwise paste clipboard
+  // When terminal application requests mouse reporting (e.g. mc, htop, vim, tmux), preserve mouse events unless Shift is pressed
+  container.addEventListener('contextmenu', async (e) => {
+    if (term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none' && !e.shiftKey) {
+      // In curses mouse tracking mode (e.g., mc, htop, links), mouse buttons are already dispatched
+      // by xterm's mousedown/mouseup handlers. Prevent the default browser context menu without pasting.
+      e.preventDefault();
+      return;
+    }
+    e.preventDefault();
+    if (term.hasSelection()) {
+      const sel = term.getSelection();
+      if (sel) {
+        setSystemClipboardText(sel);
+        term.clearSelection();
+      }
+    } else {
+      const text = await getSystemClipboardText();
+      if (text) {
+        invoke('pty_write', { sessionId: sessionId, data: text }).catch(console.error);
+      }
+    }
+  });
+
+  // Prevent duplicate DOM paste events from bubbling to xterm's hidden helper textarea
+  container.addEventListener('paste', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
 
   let streamTextBuffer = '';
 
@@ -374,54 +494,102 @@ function initTerminalSession(sessionId, containerId, shellType = 'powershell', o
     }, delay);
   };
 
-  // Tauri v2 Streaming Channel: directly receives ConPTY output
-  const onData = new Channel();
-  onData.onmessage = (chunk) => {
-    term.write(chunk);
+  // Tauri v2 Streaming Channel & backend PTY spawner
+  const spawnSession = () => {
+    const onData = new Channel();
+    onData.onmessage = (chunk) => {
+      term.write(chunk);
 
-    if (chunk && (chunk.includes('[Connection closed]') || chunk.includes('[Process completed]'))) {
-      const s = terminalSessions[sessionId];
-      if (s) s.connected = false;
-      if (sessionId.startsWith('session-wsl-')) {
-        const view = sessionId.replace('session-', '');
-        const tabToClose = document.querySelector(`.tab-card[data-view="${view}"]`);
-        if (tabToClose) {
-          const closeBtn = tabToClose.querySelector('.tab-close');
-          if (closeBtn) {
-            setTimeout(() => {
-              try { closeBtn.click(); } catch (_) {}
-            }, 120);
+      if (chunk && (chunk.includes('[Connection closed]') || chunk.includes('[Process completed]'))) {
+        const s = terminalSessions[sessionId];
+        if (s) {
+          s.connected = false;
+          if (s.host && s.host.auto_reconnect) {
+            triggerAutoReconnect(sessionId, 'Connection closed');
+            return;
+          }
+        }
+        if (typeof updateTabStatusDots === 'function') updateTabStatusDots();
+        if (typeof updateHostStatusDots === 'function') updateHostStatusDots();
+        if (sessionId.startsWith('session-wsl-')) {
+          const view = sessionId.replace('session-', '');
+          const tabToClose = document.querySelector(`.tab-card[data-view="${view}"]`);
+          if (tabToClose) {
+            const closeBtn = tabToClose.querySelector('.tab-close');
+            if (closeBtn) {
+              setTimeout(() => {
+                try { closeBtn.click(); } catch (_) {}
+              }, 120);
+            }
           }
         }
       }
-    }
 
-    // Maintain stream buffer for real-time prompt detection
-    streamTextBuffer += chunk;
-    if (streamTextBuffer.length > 2000) {
-      streamTextBuffer = streamTextBuffer.slice(-2000);
-    }
+      // Maintain stream buffer for real-time prompt detection
+      streamTextBuffer += chunk;
+      if (streamTextBuffer.length > 2000) {
+        streamTextBuffer = streamTextBuffer.slice(-2000);
+      }
 
-    // Fast-path guard: only check OSC sequences if chunk contains escape sequence '\x1B]'
-    if (chunk && chunk.includes('\x1B]')) {
-      const osc7Match = chunk.match(/\x1B\]7;file:\/\/(?:[^\/]*)\/([^\x07\x1B]+)(?:\x07|\x1B\\)/);
-      if (osc7Match) {
-        notifyTerminalCwdChange(sessionId, extractPathFromOsc7('file:///' + osc7Match[1]));
-      } else {
-        const osc9Match = chunk.match(/\x1B\]9;9;["]?([^\x07\x1B"]+)["]?(?:\x07|\x1B\\)/);
-        if (osc9Match) {
-          notifyTerminalCwdChange(sessionId, osc9Match[1].trim());
+      // Fast-path guard: only check OSC sequences if chunk contains escape sequence '\x1B]'
+      if (chunk && chunk.includes('\x1B]')) {
+        const osc7Match = chunk.match(/\x1B\]7;file:\/\/(?:[^\/]*)\/([^\x07\x1B]+)(?:\x07|\x1B\\)/);
+        if (osc7Match) {
+          notifyTerminalCwdChange(sessionId, extractPathFromOsc7('file:///' + osc7Match[1]));
         } else {
-          const osc1337Match = chunk.match(/\x1B\]1337;CurrentDir=([^\x07\x1B]+)(?:\x07|\x1B\\)/);
-          if (osc1337Match) {
-            notifyTerminalCwdChange(sessionId, osc1337Match[1].trim());
+          const osc9Match = chunk.match(/\x1B\]9;9;["]?([^\x07\x1B"]+)["]?(?:\x07|\x1B\\)/);
+          if (osc9Match) {
+            notifyTerminalCwdChange(sessionId, osc9Match[1].trim());
+          } else {
+            const osc1337Match = chunk.match(/\x1B\]1337;CurrentDir=([^\x07\x1B]+)(?:\x07|\x1B\\)/);
+            if (osc1337Match) {
+              notifyTerminalCwdChange(sessionId, osc1337Match[1].trim());
+            }
           }
         }
+      } else {
+        // Active streaming: debounce regex extraction until output stream pauses (idle)
+        schedulePromptPathExtraction(180);
       }
-    } else {
-      // Active streaming: debounce regex extraction until output stream pauses (idle)
-      schedulePromptPathExtraction(180);
-    }
+    };
+
+    invoke('pty_spawn', {
+      sessionId: sessionId,
+      shellType: shellType,
+      cols: term.cols || 80,
+      rows: term.rows || 24,
+      host: terminalSessions[sessionId]?.host || options.host || null,
+      command: options.command || null,
+      onData: onData,
+    }).then(() => {
+      const s = terminalSessions[sessionId];
+      if (s) {
+        const wasReconnecting = s.isReconnecting;
+        s.connected = true;
+        s.isReconnecting = false;
+        if (s.reconnectCountdown) {
+          clearInterval(s.reconnectCountdown);
+          s.reconnectCountdown = null;
+        }
+        if (wasReconnecting) {
+          s.term.write('\r\n\x1b[32m[✓ Reconnected successfully]\x1b[0m\r\n');
+        }
+      }
+      if (typeof updateTabStatusDots === 'function') updateTabStatusDots();
+      if (typeof updateHostStatusDots === 'function') updateHostStatusDots();
+    }).catch((err) => {
+      console.error('pty_spawn error:', err);
+      term.write(`\r\n\x1b[31m[Error launching session: ${err}]\x1b[0m\r\n`);
+      const s = terminalSessions[sessionId];
+      if (s) {
+        s.connected = false;
+        if (s.host && s.host.auto_reconnect) {
+          triggerAutoReconnect(sessionId, err);
+        }
+      }
+      if (typeof updateTabStatusDots === 'function') updateTabStatusDots();
+      if (typeof updateHostStatusDots === 'function') updateHostStatusDots();
+    });
   };
 
   // Track window title updates (standard in default Linux bash/zsh/vte for directory tracking)
@@ -455,6 +623,24 @@ function initTerminalSession(sessionId, containerId, shellType = 'powershell', o
   let inputLineBuffer = '';
   let lineHadTab = false;
   term.onData((data) => {
+    const s = terminalSessions[sessionId];
+    if (s && s.isReconnecting) {
+      if (data.includes('\r') || data.includes('\n')) {
+        executeReconnect(sessionId);
+        return;
+      }
+      if (data.includes('\x03')) {
+        if (s.reconnectCountdown) {
+          clearInterval(s.reconnectCountdown);
+          s.reconnectCountdown = null;
+        }
+        s.isReconnecting = false;
+        s.term.write('\r\x1b[2K\x1b[90m[Auto-reconnect paused. Press Enter to retry now.]\x1b[0m\r\n');
+        if (typeof updateTabStatusDots === 'function') updateTabStatusDots();
+        if (typeof updateHostStatusDots === 'function') updateHostStatusDots();
+        return;
+      }
+    }
     invoke('pty_write', { sessionId: sessionId, data: data }).catch(console.error);
 
     // If Tab key was typed, remote shell handles autocompletion
@@ -581,19 +767,7 @@ function initTerminalSession(sessionId, containerId, shellType = 'powershell', o
     }, 60);
   });
 
-  // Spawn backend PTY (local or native async russh channel if host is provided)
-  invoke('pty_spawn', {
-    sessionId: sessionId,
-    shellType: shellType,
-    cols: term.cols || 80,
-    rows: term.rows || 24,
-    host: options.host || null,
-    command: options.command || null,
-    onData: onData,
-  }).catch((err) => {
-    console.error('pty_spawn error:', err);
-    term.write(`\r\n\x1b[31m[Error launching session: ${err}]\x1b[0m\r\n`);
-  });
+  // Backend PTY session is spawned below after session object registration
 
   // Listen for in-band ZMODEM transfer events
   if (window.__TAURI__ && window.__TAURI__.event) {
@@ -612,23 +786,22 @@ function initTerminalSession(sessionId, containerId, shellType = 'powershell', o
     }).catch?.(() => {});
   }
 
-  // Intercept Ctrl+C (copy when selected) and Ctrl+V / Ctrl+Shift+V (paste)
+  // Handle terminal keyboard shortcuts
   term.attachCustomKeyEventHandler((e) => {
     if (e.type === 'keydown') {
-      // Ctrl+C with text selected -> Copy to clipboard
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'c' && term.hasSelection()) {
-        setSystemClipboardText(term.getSelection());
-        return false;
-      }
-      // Ctrl+Shift+C -> Copy to clipboard
+      // Ctrl+Shift+C -> Explicit keyboard copy to clipboard
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'c') {
         if (term.hasSelection()) {
           setSystemClipboardText(term.getSelection());
         }
         return false;
       }
-      // Ctrl+V or Ctrl+Shift+V -> Paste from clipboard (Instant native OS paste, no permission prompt)
+      // Note: Standard Ctrl+C is NOT intercepted, ensuring SIGINT (\x03) terminates running processes cleanly!
+
+      // Ctrl+V or Ctrl+Shift+V -> Paste from clipboard (prevent duplicate DOM paste events)
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        e.stopPropagation();
         getSystemClipboardText().then((text) => {
           if (text) {
             invoke('pty_write', { sessionId: sessionId, data: text }).catch(console.error);
@@ -636,23 +809,23 @@ function initTerminalSession(sessionId, containerId, shellType = 'powershell', o
         }).catch(console.error);
         return false;
       }
-      // Ctrl+R -> Prevent app reload / restart!
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'r') {
-        const leftDrawer = document.getElementById('left-drawer');
-        const isDrawerOpen = leftDrawer && !leftDrawer.classList.contains('collapsed');
-        if (isDrawerOpen && typeof triggerCurrentMenuRefresh === 'function' && triggerCurrentMenuRefresh()) {
-          return false;
-        }
-        // If drawer is closed or not refreshable, send Ctrl+R (\x12) to PTY for shell reverse-i-search
-        invoke('pty_write', { sessionId: sessionId, data: '\x12' }).catch(console.error);
-        return false;
+
+      // Function keys F1-F12 -> Prevent default browser actions (F1 help, F3 find, F5 reload, F7 caret browsing)
+      // and pass directly to terminal applications (mc, htop, nano)
+      if (e.key.startsWith('F') && /^F([1-9]|1[0-2])$/.test(e.key)) {
+        e.preventDefault();
+        return true;
       }
-      // F5 -> Prevent app reload / restart!
-      if (e.key === 'F5') {
-        if (typeof triggerCurrentMenuRefresh === 'function') {
-          triggerCurrentMenuRefresh();
+
+      // Intercept browser accelerators so they do NOT trigger webview browser actions
+      // (Ctrl+R = reload, Ctrl+P = print, Ctrl+O = open, Ctrl+N = new window, Ctrl+W = close, Ctrl+S = save, Ctrl+F = find)
+      // Allow xterm to pass their ASCII control codes (\x12, \x10, \x0f, \x0e, \x17, \x13, \x06) to the shell/PTY!
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+        const k = e.key.toLowerCase();
+        if (['r', 'p', 'o', 'n', 'w', 's', 'f', 'h', 'j', 'u'].includes(k)) {
+          e.preventDefault();
+          return true;
         }
-        return false;
       }
     }
     return true;
@@ -668,11 +841,21 @@ function initTerminalSession(sessionId, containerId, shellType = 'powershell', o
     term,
     fitAddon,
     containerId,
+    resizeObserver,
     shellType,
     options,
     host: options.host || null,
     lastKnownPath: options.host ? (sftpRemotePaths[options.host.id] || '~') : (sftpLocalPath || '.'),
+    connected: true,
+    isReconnecting: false,
+    reconnectCountdown: null,
+    reconnectSecondsLeft: 0,
+    spawnSession: spawnSession,
   };
+
+  // Launch initial PTY session
+  spawnSession();
+
   return terminalSessions[sessionId];
 }
 
@@ -689,6 +872,13 @@ function resizeSession(sess) {
 
 function resizeAllTerminals() {
   Object.values(terminalSessions).forEach(resizeSession);
+}
+
+// Re-fit all terminals once web fonts are fully loaded to ensure accurate monospace cell dimensions
+if (typeof document !== 'undefined' && document.fonts && typeof document.fonts.ready?.then === 'function') {
+  document.fonts.ready.then(() => {
+    resizeAllTerminals();
+  }).catch(() => {});
 }
 
 function resizeActiveTerminal() {

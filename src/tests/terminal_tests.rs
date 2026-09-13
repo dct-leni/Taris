@@ -32,3 +32,50 @@ fn test_parse_zfile_payload() {
     assert_eq!(name, "archive.tar.gz");
     assert_eq!(size, 1048576);
 }
+
+#[test]
+fn test_utf8_chunk_decoder_complete() {
+    use taris_lib::terminal::Utf8ChunkDecoder;
+    let mut decoder = Utf8ChunkDecoder::new();
+    let text = "Hello world! ✔ Progress: [████] 100%\r\n";
+    let decoded = decoder.feed(text.as_bytes());
+    assert_eq!(decoded.as_deref(), Some(text));
+    assert!(decoder.flush().is_none());
+}
+
+#[test]
+fn test_utf8_chunk_decoder_split_multibyte() {
+    use taris_lib::terminal::Utf8ChunkDecoder;
+    let mut decoder = Utf8ChunkDecoder::new();
+    
+    // '█' is 3 bytes: 0xE2 0x96 0x88
+    // Chunk 1: "Progress: [" + 0xE2 0x96 (incomplete 2 bytes)
+    let mut chunk1 = b"Progress: [".to_vec();
+    chunk1.push(0xE2);
+    chunk1.push(0x96);
+
+    let decoded1 = decoder.feed(&chunk1);
+    assert_eq!(decoded1.as_deref(), Some("Progress: ["));
+
+    // Chunk 2: 0x88 (completes '█') + "] Done\r\n"
+    let mut chunk2 = vec![0x88];
+    chunk2.extend_from_slice(b"] Done\r\n");
+
+    let decoded2 = decoder.feed(&chunk2);
+    assert_eq!(decoded2.as_deref(), Some("█] Done\r\n"));
+    assert!(decoder.flush().is_none());
+}
+
+#[test]
+fn test_utf8_chunk_decoder_split_checkmark_and_spinner() {
+    use taris_lib::terminal::Utf8ChunkDecoder;
+    let mut decoder = Utf8ChunkDecoder::new();
+
+    // '✔' is 3 bytes: 0xE2 0x9C 0x94
+    // Send 1 byte in chunk 1, 2 bytes in chunk 2
+    let decoded1 = decoder.feed(&[0xE2]);
+    assert_eq!(decoded1, None);
+
+    let decoded2 = decoder.feed(&[0x9C, 0x94, b' ']);
+    assert_eq!(decoded2.as_deref(), Some("✔ "));
+}

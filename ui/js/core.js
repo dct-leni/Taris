@@ -459,7 +459,16 @@ function setupTabInteractivity() {
               }
             }
             if (terminalSessions[sessionId]) {
-              try { terminalSessions[sessionId].term.dispose(); } catch (err) { }
+              try {
+                if (terminalSessions[sessionId].reconnectCountdown) {
+                  clearInterval(terminalSessions[sessionId].reconnectCountdown);
+                  terminalSessions[sessionId].reconnectCountdown = null;
+                }
+                if (terminalSessions[sessionId].resizeObserver) {
+                  terminalSessions[sessionId].resizeObserver.disconnect();
+                }
+                terminalSessions[sessionId].term.dispose();
+              } catch (err) { }
               delete terminalSessions[sessionId];
             }
             document.getElementById(`${view}-pane`)?.remove();
@@ -805,15 +814,9 @@ function setupSplitters() {
 let currentTargetSession = null;
 
 function setupControlledContextMenu() {
-  const termMenu = document.getElementById('terminal-context-menu');
   const sftpMenu = document.getElementById('sftp-context-menu');
   const colMenu = document.getElementById('sftp-col-context-menu');
   const hostMenu = document.getElementById('host-context-menu');
-
-  const copyBtn = document.getElementById('ctx-menu-copy');
-  const pasteBtn = document.getElementById('ctx-menu-paste');
-  const selectAllBtn = document.getElementById('ctx-menu-select-all');
-  const clearBtn = document.getElementById('ctx-menu-clear');
 
   const btnOpenBuiltIn = document.getElementById('sftp-ctx-open-built-in');
   const btnOpenExternal = document.getElementById('sftp-ctx-open-external');
@@ -827,7 +830,6 @@ function setupControlledContextMenu() {
   const dividerDelete = document.getElementById('sftp-ctx-delete-divider');
 
   const hideAllContextMenus = () => {
-    termMenu?.classList.add('hidden');
     sftpMenu?.classList.add('hidden');
     colMenu?.classList.add('hidden');
     hostMenu?.classList.add('hidden');
@@ -851,7 +853,7 @@ function setupControlledContextMenu() {
 
     const sftpHeader = e.target.closest('#sftp-col-header, #sftp-col-context-menu');
     const sftpSidebar = e.target.closest('#drawer-files, #sftp-context-menu, #sftp-file-list');
-    const termWrapper = e.target.closest('.xterm-view-wrapper, .xterm, #terminal-context-menu');
+    const termWrapper = e.target.closest('.xterm-view-wrapper, .xterm');
 
     // ── Case 0: Right-Click on SFTP Column Header ──
     if (sftpHeader && colMenu) {
@@ -871,7 +873,6 @@ function setupControlledContextMenu() {
 
     // ── Case A: Right-Click inside SFTP File Explorer List ──
     if (sftpSidebar && sftpMenu) {
-      termMenu?.classList.add('hidden');
       colMenu?.classList.add('hidden');
 
       const row = e.target.closest('.file-row');
@@ -921,80 +922,13 @@ function setupControlledContextMenu() {
     }
 
     // ── Case B: Right-Click inside Terminal Containers ──
-    if (termWrapper && termMenu) {
-      sftpMenu?.classList.add('hidden');
-
-      let targetSess = null;
-      for (const sess of Object.values(terminalSessions)) {
-        const container = document.getElementById(sess.containerId);
-        if (container && (container === termWrapper || container.contains(termWrapper))) {
-          targetSess = sess;
-          break;
-        }
-      }
-      if (!targetSess) {
-        const activeTab = document.querySelector('.tab-card.active');
-        const view = activeTab?.getAttribute('data-view');
-        if (view) {
-          targetSess = terminalSessions[`session-${view}`] || terminalSessions[view];
-        }
-      }
-
-      if (!targetSess) {
-        hideAllContextMenus();
-        return;
-      }
-
-      currentTargetSession = targetSess;
-      const hasSelection = targetSess.term.hasSelection();
-      copyBtn?.classList.toggle('disabled', !hasSelection);
-
-      termMenu.classList.remove('hidden');
-      const menuWidth = termMenu.offsetWidth || 180;
-      const menuHeight = termMenu.offsetHeight || 135;
-      const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8);
-      const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8);
-      termMenu.style.left = `${Math.max(8, x)}px`;
-      termMenu.style.top = `${Math.max(8, y)}px`;
+    // Suppress browser context menu but do NOT show HTML popup; native mouse/terminal handlers take over
+    if (termWrapper) {
+      hideAllContextMenus();
       return;
     }
 
     // ── Case C: Anywhere else ──
-    hideAllContextMenus();
-  });
-
-  // Terminal Menu Item Actions
-  copyBtn?.addEventListener('click', () => {
-    if (currentTargetSession && currentTargetSession.term.hasSelection()) {
-      const text = currentTargetSession.term.getSelection();
-      setSystemClipboardText(text);
-    }
-    hideAllContextMenus();
-  });
-
-  pasteBtn?.addEventListener('click', () => {
-    if (currentTargetSession) {
-      const sess = currentTargetSession;
-      getSystemClipboardText().then((text) => {
-        if (text) {
-          invoke('pty_write', { sessionId: sess.sessionId, data: text }).catch(console.error);
-        }
-      }).catch(console.error);
-    }
-    hideAllContextMenus();
-  });
-
-  selectAllBtn?.addEventListener('click', () => {
-    if (currentTargetSession) {
-      currentTargetSession.term.selectAll();
-    }
-    hideAllContextMenus();
-  });
-
-  clearBtn?.addEventListener('click', () => {
-    if (currentTargetSession) {
-      currentTargetSession.term.clear();
-    }
     hideAllContextMenus();
   });
 
@@ -1091,10 +1025,9 @@ function setupControlledContextMenu() {
   // Hide on outside left-click or Escape key (no blur listener)
   window.addEventListener('pointerdown', (e) => {
     if (e.button === 0) {
-      const inTerm = termMenu && termMenu.contains(e.target);
       const inSftp = sftpMenu && sftpMenu.contains(e.target);
       const inCol = colMenu && colMenu.contains(e.target);
-      if (!inTerm && !inSftp && !inCol) {
+      if (!inSftp && !inCol) {
         hideAllContextMenus();
       }
     }

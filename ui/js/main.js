@@ -629,9 +629,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     resizeAllTerminals();
   }, 100);
 
-  // Start background periodic host alive checks (every 8s, minimal CPU load)
+  // Start background periodic host alive checks (every 15s, only when hosts drawer visible, minimal CPU load)
   pollHostsAlive();
-  setInterval(pollHostsAlive, 8000);
+  setInterval(pollHostsAlive, 15000);
 
   // Controlled rate background polling: Docker (15s), Ports (12s), Tunnels (5s), WireGuard (5s)
   let lastDockerPoll = 0;
@@ -642,6 +642,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   let lastLogsPoll = 0;
 
   setInterval(() => {
+    if (document.hidden) return;
     const now = Date.now();
     if (activeCategory === 'docker') {
       if (now - lastDockerPoll >= 15000) {
@@ -678,9 +679,17 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   }, 2000);
 
-  // Start remote telemetry polling (runs only when active connected remote tab is open)
+  // Start remote telemetry polling (5s cadence, runs only when active connected remote tab is open)
   updateRemoteTelemetry();
-  setInterval(updateRemoteTelemetry, 3000);
+  setInterval(updateRemoteTelemetry, 5000);
+
+  // Resume immediate polling when window becomes visible
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      updateRemoteTelemetry();
+      pollHostsAlive();
+    }
+  });
 
   // Auto-resize on window resize
   window.addEventListener('resize', resizeAllTerminals);

@@ -577,6 +577,7 @@ pub fn create_wsl_host_config(distro: &WslDistro) -> HostConfig {
         cloud_instance_id: None,
         network_route: Some("direct".into()),
         protocol: Some(format!("wsl:{}", distro.name)),
+        auto_reconnect: false,
     }
 }
 

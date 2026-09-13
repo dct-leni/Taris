@@ -139,14 +139,23 @@ let isCheckingHosts = false;
 
 function isHostActive(h) {
   if (!h) return false;
-  // 1. Check open tabs
-  const tab = document.querySelector(`.tab-card[data-view="host-${h.id}"]`);
-  if (tab) return true;
-  // 2. Check terminal sessions
-  if (typeof terminalSessions !== 'undefined' && terminalSessions[`session-host-${h.id}`]) return true;
-  // 3. Check active tunnels for this host
+  // 1. Check if an active, connected terminal session exists
+  if (typeof terminalSessions !== 'undefined') {
+    const s = terminalSessions[`session-host-${h.id}`];
+    if (s && s.connected === true) return true;
+  }
+  // 2. Check active tunnels for this host
   if (window.activeHostTunnels && (window.activeHostTunnels[h.id] || window.activeHostTunnels[h.host])) {
     return true;
+  }
+  return false;
+}
+
+function isHostReconnecting(h) {
+  if (!h) return false;
+  if (typeof terminalSessions !== 'undefined') {
+    const s = terminalSessions[`session-host-${h.id}`];
+    if (s && s.isReconnecting === true) return true;
   }
   return false;
 }
@@ -165,6 +174,7 @@ function updateHostStatusDots() {
     const hostObj = (appConfig.hosts || []).find((h) => h.id === hostId);
     if (!hostObj) return;
     const active = isHostActive(hostObj);
+    const reconnecting = isHostReconnecting(hostObj);
     if (active) {
       item.classList.add('active');
     } else {
@@ -172,8 +182,17 @@ function updateHostStatusDots() {
     }
     const dot = item.querySelector('.online-dot');
     if (dot) {
-      dot.className = active ? 'online-dot active' : 'online-dot';
-      dot.title = active ? 'Connected / Active session' : 'Inactive (No open connections)';
+      if (active) {
+        dot.className = 'online-dot active';
+        dot.title = 'Connected / Active session';
+      } else if (reconnecting) {
+        const s = typeof terminalSessions !== 'undefined' ? terminalSessions[`session-host-${hostObj.id}`] : null;
+        dot.className = 'online-dot reconnecting';
+        dot.title = `Reconnecting in ${s?.reconnectSecondsLeft || 30}s...`;
+      } else {
+        dot.className = 'online-dot';
+        dot.title = 'Inactive (No open connections)';
+      }
     }
   });
 }
@@ -183,18 +202,32 @@ function updateTabStatusDots() {
     const viewId = tab.getAttribute('data-view');
     const hostId = viewId.replace('host-', '');
     const hostObj = (appConfig.hosts || []).find((h) => h.id === hostId);
-    if (!hostObj) return;
+    const hostName = hostObj?.name || 'Host';
     const dot = tab.querySelector('.online-dot');
-    if (dot) {
-      const alive = isHostAlive(hostObj);
-      dot.className = alive ? 'online-dot active' : 'online-dot';
-      dot.title = alive ? `${hostObj.name} online` : `${hostObj.name} unreachable`;
+    if (!dot) return;
+
+    const s = typeof terminalSessions !== 'undefined' ? terminalSessions[`session-${viewId}`] : null;
+    if (s && s.connected === true) {
+      dot.className = 'online-dot active';
+      dot.title = `${hostName}: Connected`;
+    } else if (s && s.isReconnecting === true) {
+      dot.className = 'online-dot reconnecting';
+      dot.title = `${hostName}: Disconnected. Retrying in ${s.reconnectSecondsLeft || 30}s...`;
+    } else {
+      dot.className = 'online-dot';
+      dot.title = `${hostName}: Disconnected`;
     }
   });
 }
 
 async function pollHostsAlive() {
-  if (isCheckingHosts) return;
+  if (document.hidden || isCheckingHosts) return;
+  // If drawer is collapsed or active category is not hosts, skip polling to avoid unnecessary network queries
+  const drawer = document.getElementById('left-drawer');
+  const isDrawerOpen = drawer && !drawer.classList.contains('collapsed');
+  const isHostsView = typeof activeCategory === 'undefined' || activeCategory === 'hosts';
+  if (!isDrawerOpen || !isHostsView) return;
+
   const hosts = appConfig.hosts || [];
   if (hosts.length === 0) return;
   isCheckingHosts = true;
@@ -208,7 +241,7 @@ async function pollHostsAlive() {
     if (aliveResults && typeof aliveResults === 'object') {
       window.hostAliveMap = Object.assign(window.hostAliveMap, aliveResults);
       updateHostStatusDots();
-      updateTabStatusDots();
+      // Tabs accurately track their live session connection state, so pollHostsAlive does not overwrite tab dots
     }
   } catch (e) {
     // Gracefully handle network check failure
@@ -384,12 +417,21 @@ function renderHostsList(hosts) {
     const item = document.createElement('div');
     item.setAttribute('data-id', h.id);
     const active = isHostActive(h);
+    const reconnecting = isHostReconnecting(h);
     item.className = active ? 'host-item active' : 'host-item';
     const isCloud = h.cloud_provider && h.cloud_provider !== 'none';
     const iconHtml = isCloud ? '<i class="fa" style="color: #61afef;">&#xf0c2;</i>' : getHostIconHtml(h.icon);
     const cloudPillHtml = isCloud ? `<span class="host-cloud-pill ${h.cloud_provider}">${escapeHtml(h.cloud_provider.toUpperCase())}</span>` : '';
-    const dotClass = active ? 'online-dot active' : 'online-dot';
-    const dotTitle = active ? 'Connected / Active session' : 'Inactive (No open connections)';
+    let dotClass = 'online-dot';
+    let dotTitle = 'Inactive (No open connections)';
+    if (active) {
+      dotClass = 'online-dot active';
+      dotTitle = 'Connected / Active session';
+    } else if (reconnecting) {
+      const s = typeof terminalSessions !== 'undefined' ? terminalSessions[`session-host-${h.id}`] : null;
+      dotClass = 'online-dot reconnecting';
+      dotTitle = `Reconnecting in ${s?.reconnectSecondsLeft || 30}s...`;
+    }
     
     let connText = h.host;
     if (h.cloud_provider === 'gcp') {
@@ -416,11 +458,12 @@ function renderHostsList(hosts) {
     }
 
     const moshPillHtml = h.protocol === 'mosh' ? `<span class="host-cloud-pill" style="background: rgba(229,192,123,0.15); color: #e5c07b; border: 1px solid rgba(229,192,123,0.3);"><i class="fa" style="font-size: 8px;">&#xf0e7;</i> MOSH</span>` : '';
+    const autoPillHtml = h.auto_reconnect ? `<span class="host-cloud-pill" style="background: rgba(198,120,221,0.15); color: #c678dd; border: 1px solid rgba(198,120,221,0.3);" title="Infinite Auto-Reconnect enabled (retries every 30s)"><i class="fa" style="font-size: 8px;">&#xf01e;</i> AUTO</span>` : '';
 
     item.innerHTML = `
       <span class="${dotClass}" title="${dotTitle}"></span>
       <div class="host-icon-box">${iconHtml}</div>
-      <span class="host-name" title="${escapeHtml(h.name)}">${escapeHtml(h.name)}${cloudPillHtml}${routePillHtml}${moshPillHtml}</span>
+      <span class="host-name" title="${escapeHtml(h.name)}">${escapeHtml(h.name)}${cloudPillHtml}${routePillHtml}${moshPillHtml}${autoPillHtml}</span>
       ${ipHtml}
       <div class="host-actions">
         ${wolBtnHtml}
@@ -559,11 +602,13 @@ async function connectToHost(h) {
     const isAlive = isHostAlive(h);
     const tabLabel = isCloud ? `${h.name} (${h.cloud_provider.toUpperCase()})` : h.name;
     const moshBadgeHtml = h.protocol === 'mosh' ? '<span class="badge-mosh" title="Mosh (Mobile Shell) - Roaming & Predictive Echo" style="font-size: 9px; padding: 1px 4px; border-radius: 3px; background: rgba(229, 192, 123, 0.18); color: #e5c07b; margin-left: 4px; border: 1px solid rgba(229, 192, 123, 0.3); font-family: var(--font-mono);"><i class="fa">&#xf0e7;</i> MOSH</span>' : '';
+    const autoBadgeHtml = h.auto_reconnect ? '<span class="badge-reconnect" title="Infinite Auto-Reconnect enabled (retries every 30s)" style="font-size: 9px; padding: 1px 4px; border-radius: 3px; background: rgba(198, 120, 221, 0.18); color: #c678dd; margin-left: 4px; border: 1px solid rgba(198, 120, 221, 0.3); font-family: var(--font-mono);"><i class="fa">&#xf01e;</i> AUTO</span>' : '';
     tab.innerHTML = `
       ${tabIconHtml}
       <span class="online-dot ${isAlive ? 'active' : ''}" style="margin-right: -4px;"></span>
       <span class="tab-title">${escapeHtml(tabLabel)}</span>
       ${moshBadgeHtml}
+      ${autoBadgeHtml}
       <span class="tab-close">✕</span>
     `;
     document.getElementById('add-tab-btn').before(tab);
@@ -695,6 +740,7 @@ function setupAddHostModal() {
   const passwordInput = document.getElementById('host-form-password');
   const dockerInput = document.getElementById('host-form-docker');
   const portScanInput = document.getElementById('host-form-port-scan');
+  const autoReconnectInput = document.getElementById('host-form-auto-reconnect');
   const macInput = document.getElementById('host-form-mac');
   const networkRouteSelect = document.getElementById('host-form-network-route');
   const protocolSelect = document.getElementById('host-form-protocol');
@@ -956,6 +1002,7 @@ function setupAddHostModal() {
       if (iconSearchInput) iconSearchInput.value = '';
       if (dockerInput) dockerInput.checked = true;
       if (portScanInput) portScanInput.checked = true;
+      if (autoReconnectInput) autoReconnectInput.checked = false;
       if (macInput) macInput.value = '';
       if (protocolSelect) protocolSelect.value = 'ssh';
       updateNetworkRouteOptions('direct');
@@ -989,6 +1036,7 @@ function setupAddHostModal() {
     if (iconSearchInput) iconSearchInput.value = '';
     if (dockerInput) dockerInput.checked = h.has_docker !== false;
     if (portScanInput) portScanInput.checked = h.enable_port_scan !== false;
+    if (autoReconnectInput) autoReconnectInput.checked = h.auto_reconnect === true;
     if (macInput) macInput.value = h.mac_address || '';
     updateNetworkRouteOptions(h.network_route || 'direct');
 
@@ -1043,6 +1091,7 @@ function setupAddHostModal() {
       let icon = iconInput?.value || 'server';
       const hasDocker = dockerInput?.checked || false;
       const enablePortScan = portScanInput ? portScanInput.checked : true;
+      const autoReconnect = autoReconnectInput ? autoReconnectInput.checked : false;
       const macAddress = macInput?.value.trim() || null;
 
       if (!name || !host) {
@@ -1076,6 +1125,7 @@ function setupAddHostModal() {
         password: authType === 'password' ? password : null,
         has_docker: hasDocker,
         enable_port_scan: enablePortScan,
+        auto_reconnect: autoReconnect,
         mac_address: macAddress,
         network_route: (networkRouteSelect ? networkRouteSelect.value : 'direct'),
         protocol: (protocolSelect && protocolSelect.value === 'mosh') ? 'mosh' : null,
@@ -1102,6 +1152,11 @@ function setupAddHostModal() {
         const updatedConfig = await invoke('add_host', { host: newHost });
         if (updatedConfig) {
           appConfig = updatedConfig;
+          const openSess = terminalSessions[`session-host-${newHost.id}`];
+          if (openSess) {
+            openSess.host = newHost;
+            if (openSess.options) openSess.options.host = newHost;
+          }
           renderHostsList(updatedConfig.hosts);
           const activeTab = document.querySelector('.tab-card.active');
           const currentView = activeTab?.getAttribute('data-view') || 'local';
@@ -1123,31 +1178,142 @@ const hostTelemetryFailures = {};
 function setIdleTelemetryPlaceholders() {
   const fCpu = document.getElementById('footer-cpu');
   const fRam = document.getElementById('footer-ram');
+  const fDisk = document.getElementById('footer-disk-val');
+  const fDiskBox = document.getElementById('footer-disk-box');
   const fNetTx = document.getElementById('footer-net-tx');
   const fNetRx = document.getElementById('footer-net-rx');
   const fPing = document.getElementById('footer-ping-val');
   if (fCpu && fCpu.textContent !== '--') fCpu.textContent = '--';
   if (fRam && fRam.textContent !== '--') fRam.textContent = '--';
+  if (fDisk && fDisk.textContent !== '--') { fDisk.textContent = '--'; fDisk.className = 'stat-val'; }
+  if (fDiskBox) fDiskBox.title = 'Disk Free Space';
   if (fNetTx && fNetTx.textContent !== '-- KB/s') fNetTx.textContent = '-- KB/s';
   if (fNetRx && fNetRx.textContent !== '-- KB/s') fNetRx.textContent = '-- KB/s';
   if (fPing && fPing.textContent !== '--') { fPing.textContent = '--'; fPing.className = 'stat-val'; }
 }
 
-async function updateRemoteTelemetry() {
-  const activeTab = document.querySelector('.tab-card.active');
-  const view = activeTab?.getAttribute('data-view');
-  const statusRight = document.querySelector('.status-right');
+function renderTelemetryData(data, isRemote = true) {
   const fCpu = document.getElementById('footer-cpu');
   const fRam = document.getElementById('footer-ram');
+  const fDisk = document.getElementById('footer-disk-val');
+  const fDiskBox = document.getElementById('footer-disk-box');
   const fNetTx = document.getElementById('footer-net-tx');
   const fNetRx = document.getElementById('footer-net-rx');
   const fPing = document.getElementById('footer-ping-val');
 
-  if (!view || !view.startsWith('host-')) {
+  const cpu = parseFloat(data.cpu || 0).toFixed(1);
+  const ram = parseFloat(data.ram || 0).toFixed(1);
+
+  if (fCpu) fCpu.textContent = `${cpu}%`;
+  if (fRam) fRam.textContent = `${ram}%`;
+
+  if (fDisk) {
+    if (data.disks && data.disks.length > 0) {
+      const fmtBytes = (bytes) => {
+        if (bytes >= 1024 * 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024 * 1024)).toFixed(1)} TB`;
+        if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+        if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+        return `${(bytes / 1024).toFixed(0)} KB`;
+      };
+
+      const primary = data.disks.find(d => d.mount === '/' || d.mount === 'C:\\' || d.mount === 'C:') 
+        || [...data.disks].sort((a, b) => b.total_bytes - a.total_bytes)[0];
+      const freeStr = fmtBytes(primary.available_bytes);
+      let mountLabel = primary.mount;
+      if (mountLabel.endsWith(':\\') || mountLabel.endsWith(':/')) {
+        mountLabel = mountLabel.slice(0, 2);
+      }
+      const prefix = data.disks.length > 1 ? `${mountLabel}: ` : (mountLabel === '/' ? '/: ' : '');
+      fDisk.textContent = `${prefix}${freeStr} free`;
+
+      if (primary.used_percent >= 90) {
+        fDisk.className = 'stat-val ping-bad';
+      } else if (primary.used_percent >= 80) {
+        fDisk.className = 'stat-val ping-medium';
+      } else {
+        fDisk.className = 'stat-val';
+      }
+
+      if (fDiskBox) {
+        const diskLines = data.disks.map(d => {
+          const devStr = d.device ? ` (${d.device})` : '';
+          return `${d.mount}${devStr}: ${fmtBytes(d.available_bytes)} free of ${fmtBytes(d.total_bytes)} (${d.used_percent.toFixed(1)}% used)`;
+        });
+        fDiskBox.title = diskLines.join('\n');
+      }
+    } else {
+      fDisk.textContent = '--';
+      if (fDiskBox) fDiskBox.title = 'No disks reported';
+    }
+  }
+
+  if (fPing) {
+    if (isRemote && typeof data.ping_ms === 'number') {
+      const ms = data.ping_ms;
+      fPing.textContent = `${ms} ms`;
+      fPing.className = 'stat-val ' + (ms < 100 ? 'ping-good' : (ms < 300 ? 'ping-medium' : 'ping-bad'));
+    } else {
+      fPing.textContent = isRemote ? '--' : 'local';
+      fPing.className = 'stat-val';
+    }
+  }
+
+  if (isRemote && typeof data.net_rx === 'number' && typeof data.net_tx === 'number') {
+    const now = Date.now();
+    const elapsedSec = (now - prevNetTime) / 1000;
+    if (prevNetRx === 0) {
+      if (fNetTx) fNetTx.textContent = `0.0 KB/s`;
+      if (fNetRx) fNetRx.textContent = `0.0 KB/s`;
+    } else if (elapsedSec > 0 && data.net_rx >= prevNetRx) {
+      const rxRate = (data.net_rx - prevNetRx) / elapsedSec;
+      const txRate = (data.net_tx - prevNetTx) / elapsedSec;
+
+      const fmt = (bytes) => {
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB/s`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB/s`;
+      };
+
+      const txStr = fmt(txRate);
+      const rxStr = fmt(rxRate);
+
+      if (fNetTx && fNetTx.textContent !== txStr) fNetTx.textContent = txStr;
+      if (fNetRx && fNetRx.textContent !== rxStr) fNetRx.textContent = rxStr;
+    }
+
+    prevNetRx = data.net_rx;
+    prevNetTx = data.net_tx;
+    prevNetTime = now;
+  }
+}
+
+async function updateRemoteTelemetry() {
+  if (document.hidden) return;
+  const activeTab = document.querySelector('.tab-card.active');
+  const view = activeTab?.getAttribute('data-view');
+
+  if (!view) {
     setIdleTelemetryPlaceholders();
     return;
   }
 
+  // 1. Local terminal telemetry (Local machine CPU, RAM, Disk)
+  if (view === 'local' || !view.startsWith('host-')) {
+    if (isTelemetryPolling) return;
+    isTelemetryPolling = true;
+    try {
+      const data = await invoke('get_local_telemetry');
+      if (data) {
+        renderTelemetryData(data, false);
+      }
+    } catch (_) {
+      setIdleTelemetryPlaceholders();
+    } finally {
+      isTelemetryPolling = false;
+    }
+    return;
+  }
+
+  // 2. Remote SSH Host Telemetry
   const hostId = view.replace('host-', '');
   const host = (appConfig.hosts || []).find((h) => h.id === hostId);
   if (!host) {
@@ -1180,58 +1346,11 @@ async function updateRemoteTelemetry() {
     const data = await invoke('get_remote_telemetry', { host });
     if (data) {
       hostTelemetryFailures[hostId] = 0;
-      const cpu = parseFloat(data.cpu).toFixed(1);
-      const ram = parseFloat(data.ram).toFixed(1);
-
-      if (fCpu) fCpu.textContent = `${cpu}%`;
-      if (fRam) fRam.textContent = `${ram}%`;
-
-      if (fPing) {
-        if (typeof data.ping_ms === 'number') {
-          const ms = data.ping_ms;
-          fPing.textContent = `${ms} ms`;
-          fPing.className = 'stat-val ' + (ms < 100 ? 'ping-good' : (ms < 300 ? 'ping-medium' : 'ping-bad'));
-        } else {
-          fPing.textContent = `--`;
-          fPing.className = 'stat-val';
-        }
-      }
-
-      // Calculate network speeds
-      const now = Date.now();
-      const elapsedSec = (now - prevNetTime) / 1000;
-      if (prevNetRx === 0) {
-        // Initial sample baseline
-        if (fNetTx) fNetTx.textContent = `0.0 KB/s`;
-        if (fNetRx) fNetRx.textContent = `0.0 KB/s`;
-      } else if (elapsedSec > 0 && data.net_rx >= prevNetRx) {
-        const rxRate = (data.net_rx - prevNetRx) / elapsedSec;
-        const txRate = (data.net_tx - prevNetTx) / elapsedSec;
-
-        const fmt = (bytes) => {
-          if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB/s`;
-          return `${(bytes / (1024 * 1024)).toFixed(1)} MB/s`;
-        };
-
-        const txStr = fmt(txRate);
-        const rxStr = fmt(rxRate);
-
-        if (fNetTx && fNetTx.textContent !== txStr) fNetTx.textContent = txStr;
-        if (fNetRx && fNetRx.textContent !== rxStr) fNetRx.textContent = rxStr;
-      }
-
-      prevNetRx = data.net_rx;
-      prevNetTx = data.net_tx;
-      prevNetTime = now;
+      renderTelemetryData(data, true);
     }
   } catch (e) {
     hostTelemetryFailures[hostId] = (hostTelemetryFailures[hostId] || 0) + 1;
-    // Gracefully handle remote telemetry error or timeout
-    if (fCpu) fCpu.textContent = `--`;
-    if (fRam) fRam.textContent = `--`;
-    if (fNetTx) fNetTx.textContent = `-- KB/s`;
-    if (fNetRx) fNetRx.textContent = `-- KB/s`;
-    if (fPing) { fPing.textContent = `--`; fPing.className = 'stat-val'; }
+    setIdleTelemetryPlaceholders();
   } finally {
     isTelemetryPolling = false;
   }

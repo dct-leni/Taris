@@ -868,6 +868,24 @@ svg.host-icon-svg {
   box-shadow: 0 0 6px rgba(152, 195, 121, 0.55);
 }
 
+.online-dot.reconnecting {
+  background: var(--amber, #e5c07b);
+  opacity: 1;
+  box-shadow: 0 0 6px rgba(229, 192, 123, 0.55);
+  animation: pulse-dot 1.5s infinite ease-in-out;
+}
+
+@keyframes pulse-dot {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.18);
+  }
+}
+
 .offline-dot {
   width: 7px;
   height: 7px;
@@ -1217,7 +1235,7 @@ svg.host-icon-svg {
   width: 100%;
   height: 100%;
   background: var(--bg-app);
-  padding: 6px 8px;
+  padding: 0;
   box-sizing: border-box;
   overflow: hidden;
   position: relative;
@@ -1226,6 +1244,11 @@ svg.host-icon-svg {
 .xterm {
   height: 100%;
   width: 100%;
+  padding: 4px 6px;
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 .xterm-viewport {
@@ -2721,10 +2744,14 @@ table.data-table td {
   font-size: 11px;
 }
 
-#footer-cpu, #footer-ram {
+#footer-cpu, #footer-ram, #footer-disk-val {
   min-width: 36px;
   text-align: left;
   display: inline-block;
+}
+
+#footer-disk-box {
+  cursor: help;
 }
 
 .status-net-box {

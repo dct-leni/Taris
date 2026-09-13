@@ -226,6 +226,8 @@ pub struct HostConfig {
     pub network_route: Option<String>,
     #[serde(default)]
     pub protocol: Option<String>,
+    #[serde(default)]
+    pub auto_reconnect: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -402,6 +404,15 @@ impl Default for AppConfig {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct DiskInfo {
+    pub mount: String,
+    pub device: Option<String>,
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+    pub used_percent: f32,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TelemetryData {
     pub cpu: f32,
@@ -410,6 +421,8 @@ pub struct TelemetryData {
     pub net_tx: u64,
     #[serde(default)]
     pub ping_ms: Option<u32>,
+    #[serde(default)]
+    pub disks: Vec<DiskInfo>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -470,12 +483,16 @@ pub struct ActiveTunnel {
 #[derive(Clone)]
 pub struct AppState {
     pub pty_sessions: Arc<Mutex<HashMap<String, PtySession>>>,
+    pub pending_resizes: Arc<Mutex<HashMap<String, (u16, u16)>>>,
     pub config_path: PathBuf,
     pub ssh_pool: ssh::SshSessionPool,
     pub docker_cpu_samples: Arc<Mutex<HashMap<String, (u64, u64, std::time::Instant)>>>,
     pub active_tunnels: Arc<Mutex<HashMap<String, ActiveTunnel>>>,
     pub mesh: Arc<mesh::MeshState>,
     pub mcp_handle: Arc<Mutex<Option<mcp::McpServerHandle>>>,
+    pub local_system: Arc<Mutex<sysinfo::System>>,
+    pub local_disks: Arc<Mutex<(sysinfo::Disks, std::time::Instant)>>,
+    pub remote_disks_cache: Arc<Mutex<HashMap<String, (Vec<DiskInfo>, std::time::Instant)>>>,
 }
 
 impl AppState {
@@ -742,14 +759,22 @@ async fn pty_spawn(
     command: Option<String>,
     on_data: tauri::ipc::Channel<String>,
 ) -> Result<(), String> {
+    let (initial_cols, initial_rows) = {
+        let pending = state.pending_resizes.lock().unwrap().get(&session_id).copied();
+        match pending {
+            Some((c, r)) => (c, r),
+            None => (cols.unwrap_or(80), rows.unwrap_or(24)),
+        }
+    };
+
     if let Some(h) = host {
         if h.protocol.as_deref() == Some("mosh") {
             let handle = state.get_russh_session(&h).await?;
             let (write_tx, resize_tx, shutdown_tx) = crate::mosh::spawn_mosh_session(
                 &handle,
                 &h,
-                cols.unwrap_or(80),
-                rows.unwrap_or(24),
+                initial_cols,
+                initial_rows,
                 on_data,
             )
             .await?;
@@ -780,8 +805,8 @@ async fn pty_spawn(
             .request_pty(
                 true,
                 "xterm-256color",
-                cols.unwrap_or(80) as u32,
-                rows.unwrap_or(24) as u32,
+                initial_cols as u32,
+                initial_rows as u32,
                 0,
                 0,
                 &[],
@@ -823,6 +848,16 @@ async fn pty_spawn(
             },
         );
 
+        // If a resize event arrived while the SSH connection was negotiating, apply it immediately
+        let pending_change = {
+            state.pending_resizes.lock().unwrap().remove(&session_id)
+        };
+        if let Some((latest_cols, latest_rows)) = pending_change {
+            if latest_cols != initial_cols || latest_rows != initial_rows {
+                let _ = channel.window_change(latest_cols as u32, latest_rows as u32, 0, 0).await;
+            }
+        }
+
         let session_id_clone = session_id.clone();
         let app_clone = app.clone();
         let state_pool = state.ssh_pool.clone();
@@ -831,6 +866,7 @@ async fn pty_spawn(
 
         tokio::spawn(async move {
             let mut zmodem_detector = crate::terminal::ZmodemDetector::new();
+            let mut utf8_decoder = crate::terminal::Utf8ChunkDecoder::new();
             loop {
                 tokio::select! {
                     _ = shutdown_rx.recv() => {
@@ -855,22 +891,27 @@ async fn pty_spawn(
                                     let _ = app_clone.emit(&format!("zmodem-event-{}", session_id_clone), &event);
                                 }
                                 if !display_bytes.is_empty() {
-                                    let s = String::from_utf8_lossy(&display_bytes).to_string();
-                                    if on_data.send(s).is_err() {
-                                        break;
+                                    if let Some(s) = utf8_decoder.feed(&display_bytes) {
+                                        if on_data.send(s).is_err() {
+                                            break;
+                                        }
                                     }
                                 }
                             }
                             Some(russh::ChannelMsg::ExtendedData { ref data, .. }) => {
                                 let (display_bytes, _) = zmodem_detector.feed(data);
                                 if !display_bytes.is_empty() {
-                                    let s = String::from_utf8_lossy(&display_bytes).to_string();
-                                    if on_data.send(s).is_err() {
-                                        break;
+                                    if let Some(s) = utf8_decoder.feed(&display_bytes) {
+                                        if on_data.send(s).is_err() {
+                                            break;
+                                        }
                                     }
                                 }
                             }
                             Some(russh::ChannelMsg::ExitStatus { .. }) | Some(russh::ChannelMsg::Eof) | None => {
+                                if let Some(flushed) = utf8_decoder.flush() {
+                                    let _ = on_data.send(flushed);
+                                }
                                 let _ = on_data.send("\r\n\x1b[90m[Connection closed]\x1b[0m\r\n".to_string());
                                 break;
                             }
@@ -893,8 +934,8 @@ async fn pty_spawn(
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
-            rows: rows.unwrap_or(24),
-            cols: cols.unwrap_or(80),
+            rows: initial_rows,
+            cols: initial_cols,
             pixel_width: 0,
             pixel_height: 0,
         })
@@ -1036,14 +1077,19 @@ async fn pty_spawn(
 
     std::thread::spawn(move || {
         let mut buf = [0u8; 16384];
+        let mut utf8_decoder = crate::terminal::Utf8ChunkDecoder::new();
         while let Ok(n) = reader.read(&mut buf) {
             if n == 0 {
                 break;
             }
-            let s = String::from_utf8_lossy(&buf[..n]).to_string();
-            if on_data.send(s).is_err() {
-                break;
+            if let Some(s) = utf8_decoder.feed(&buf[..n]) {
+                if on_data.send(s).is_err() {
+                    break;
+                }
             }
+        }
+        if let Some(flushed) = utf8_decoder.flush() {
+            let _ = on_data.send(flushed);
         }
         let _ = on_data.send("\r\n\x1b[90m[Process completed]\x1b[0m\r\n".to_string());
     });
@@ -1097,6 +1143,7 @@ async fn pty_resize(
 
     if let Some(tx) = tx_opt {
         let _ = tx.send((cols, rows)).await;
+        state.pending_resizes.lock().unwrap().remove(&session_id);
         Ok(())
     } else {
         let mut sessions = state.pty_sessions.lock().unwrap();
@@ -1111,6 +1158,10 @@ async fn pty_resize(
                     })
                     .map_err(|e| e.to_string())?;
             }
+            state.pending_resizes.lock().unwrap().remove(&session_id);
+        } else {
+            // Buffer resize event if session is still negotiating connection
+            state.pending_resizes.lock().unwrap().insert(session_id, (cols, rows));
         }
         Ok(())
     }
@@ -1118,6 +1169,7 @@ async fn pty_resize(
 
 #[tauri::command]
 fn pty_close(state: tauri::State<'_, AppState>, session_id: String) -> Result<(), String> {
+    state.pending_resizes.lock().unwrap().remove(&session_id);
     let mut sessions = state.pty_sessions.lock().unwrap();
     if let Some(mut sess) = sessions.remove(&session_id) {
         match &mut sess.backend {
@@ -1525,9 +1577,34 @@ async fn check_hosts_alive(hosts: Vec<HostPingRequest>) -> HashMap<String, bool>
 #[tauri::command]
 async fn get_remote_telemetry(state: tauri::State<'_, AppState>, host: HostConfig) -> Result<TelemetryData, String> {
     let handle = state.get_russh_session(&host).await?;
+
+    // Check disk cache: only query `df -kP` once every 30s to eliminate remote disk I/O and prevent NFS/SMB hangs
+    let (should_query_disk, cached_disks) = {
+        if let Ok(cache) = state.remote_disks_cache.lock() {
+            if let Some((disks, last_check)) = cache.get(&host.id) {
+                if last_check.elapsed() < std::time::Duration::from_secs(30) {
+                    (false, disks.clone())
+                } else {
+                    (true, disks.clone())
+                }
+            } else {
+                (true, Vec::new())
+            }
+        } else {
+            (true, Vec::new())
+        }
+    };
+
+    let remote_cmd = if should_query_disk {
+        "cat /proc/stat /proc/meminfo /proc/net/dev 2>/dev/null; echo '===DISK==='; df -kP 2>/dev/null"
+    } else {
+        "cat /proc/stat /proc/meminfo /proc/net/dev 2>/dev/null"
+    };
+
+    let cmd_start = std::time::Instant::now();
     let output = match tokio::time::timeout(
         std::time::Duration::from_secs(4),
-        crate::ssh::client::exec_command(&handle, "cat /proc/stat /proc/meminfo /proc/net/dev 2>/dev/null"),
+        crate::ssh::client::exec_command(&handle, remote_cmd),
     )
     .await
     {
@@ -1535,6 +1612,8 @@ async fn get_remote_telemetry(state: tauri::State<'_, AppState>, host: HostConfi
         Ok(Err(e)) => return Err(e),
         Err(_) => return Err("Telemetry query timed out (4s)".into()),
     };
+    // Measure true end-to-end SSH round-trip latency without raw TCP connection socket spam
+    let ping_ms = Some(cmd_start.elapsed().as_millis() as u32);
 
     let out_str = output;
     if out_str.trim().is_empty() {
@@ -1543,19 +1622,101 @@ async fn get_remote_telemetry(state: tauri::State<'_, AppState>, host: HostConfi
             ram: 0.0,
             net_rx: 0,
             net_tx: 0,
-            ping_ms: None,
+            ping_ms,
+            disks: cached_disks,
         });
     }
 
-    // In-process Rust parser for Linux procfs
+    // In-process Rust parser for Linux procfs & POSIX df -kP
     let mut cpu = 0.0;
     let mut mem_total: f32 = 0.0;
     let mut mem_avail: f32 = 0.0;
     let mut net_rx: u64 = 0;
     let mut net_tx: u64 = 0;
+    let mut in_disk_section = false;
+    let mut disks = Vec::new();
 
     for line in out_str.lines() {
         let trimmed = line.trim();
+        if trimmed == "===DISK===" {
+            in_disk_section = true;
+            continue;
+        }
+
+        if in_disk_section {
+            if trimmed.starts_with("Filesystem") || trimmed.is_empty() {
+                continue;
+            }
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 6 {
+                let fs = parts[0];
+                let mount = parts[5..].join(" ");
+
+                // 1. Exclude virtual/pseudo filesystems and loopback devices (snaps, zram, ramdisks)
+                if fs.starts_with("/dev/loop")
+                    || fs.starts_with("/dev/ram")
+                    || fs.starts_with("/dev/zram")
+                    || fs.starts_with("tmpfs")
+                    || fs.starts_with("devtmpfs")
+                    || fs.starts_with("udev")
+                    || fs.starts_with("overlay")
+                    || fs.starts_with("shm")
+                    || fs.starts_with("none")
+                    || fs.starts_with("cgroup")
+                    || fs == "rootfs"
+                {
+                    continue;
+                }
+
+                // 2. Exclude system staging and virtual mount points
+                if mount.starts_with("/snap")
+                    || mount.starts_with("/var/snap")
+                    || mount.starts_with("/boot")
+                    || mount.starts_with("/dev")
+                    || mount.starts_with("/run")
+                    || mount.starts_with("/sys")
+                    || mount.starts_with("/proc")
+                    || mount.starts_with("/var/lib/docker")
+                    || mount.starts_with("/var/lib/containerd")
+                {
+                    continue;
+                }
+
+                // 3. Must be a real block device, network share, or storage pool (ZFS/Btrfs)
+                let is_real = fs.starts_with("/dev/")
+                    || fs.starts_with("//")
+                    || (!fs.starts_with('/') && fs.contains('/'));
+                if !is_real {
+                    continue;
+                }
+
+                let total_kb: u64 = parts[1].parse().unwrap_or(0);
+                let avail_kb: u64 = parts[3].parse().unwrap_or(0);
+                let pct_str = parts[4].trim_end_matches('%');
+                let used_pct: f32 = pct_str.parse().unwrap_or(0.0);
+
+                if total_kb > 0 {
+                    if let Some(existing) = disks.iter_mut().find(|d: &&mut DiskInfo| d.mount == mount || (d.device.as_deref() == Some(fs) && !fs.is_empty())) {
+                        if mount == "/" {
+                            existing.mount = "/".to_string();
+                            existing.total_bytes = total_kb * 1024;
+                            existing.available_bytes = avail_kb * 1024;
+                            existing.used_percent = used_pct;
+                        }
+                    } else {
+                        disks.push(DiskInfo {
+                            mount,
+                            device: Some(fs.to_string()),
+                            total_bytes: total_kb * 1024,
+                            available_bytes: avail_kb * 1024,
+                            used_percent: used_pct,
+                        });
+                    }
+                }
+            }
+            continue;
+        }
+
         if trimmed.starts_with("cpu ") {
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
             if parts.len() >= 5 {
@@ -1589,36 +1750,22 @@ async fn get_remote_telemetry(state: tauri::State<'_, AppState>, host: HostConfi
         }
     }
 
+    if should_query_disk {
+        if !disks.is_empty() {
+            if let Ok(mut cache) = state.remote_disks_cache.lock() {
+                cache.insert(host.id.clone(), (disks.clone(), std::time::Instant::now()));
+            }
+        } else if !cached_disks.is_empty() {
+            disks = cached_disks;
+        }
+    } else {
+        disks = cached_disks;
+    }
+
     let ram = if mem_total > 0.0 {
         ((mem_total - mem_avail) * 100.0) / mem_total
     } else {
         0.0
-    };
-
-    let ping_ms = {
-        use std::net::{TcpStream, ToSocketAddrs};
-        let target_port = if host.port == 0 { 22 } else { host.port };
-        let addr_str = format!("{}:{}", host.host, target_port);
-        let start = std::time::Instant::now();
-        if let Ok(sock) = addr_str.parse::<std::net::SocketAddr>() {
-            if TcpStream::connect_timeout(&sock, std::time::Duration::from_millis(800)).is_ok() {
-                Some(start.elapsed().as_millis() as u32)
-            } else {
-                None
-            }
-        } else if let Ok(mut addrs) = addr_str.to_socket_addrs() {
-            if let Some(addr) = addrs.next() {
-                if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(800)).is_ok() {
-                    Some(start.elapsed().as_millis() as u32)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
     };
 
     Ok(TelemetryData {
@@ -1627,6 +1774,63 @@ async fn get_remote_telemetry(state: tauri::State<'_, AppState>, host: HostConfi
         net_rx,
         net_tx,
         ping_ms,
+        disks,
+    })
+}
+
+#[tauri::command]
+async fn get_local_telemetry(state: tauri::State<'_, AppState>) -> Result<TelemetryData, String> {
+    use sysinfo::Disks;
+
+    let (cpu, ram) = {
+        let mut sys = state.local_system.lock().map_err(|e| e.to_string())?;
+        sys.refresh_cpu_usage();
+        sys.refresh_memory();
+        let cpu = sys.global_cpu_info().cpu_usage();
+        let total_mem = sys.total_memory();
+        let used_mem = sys.used_memory();
+        let ram = if total_mem > 0 {
+            (used_mem as f32 / total_mem as f32) * 100.0
+        } else {
+            0.0
+        };
+        (cpu, ram)
+    };
+
+    let disks = {
+        let mut disks_guard = state.local_disks.lock().map_err(|e| e.to_string())?;
+        if disks_guard.1.elapsed() >= std::time::Duration::from_secs(30) {
+            disks_guard.0 = Disks::new_with_refreshed_list();
+            disks_guard.1 = std::time::Instant::now();
+        }
+        let mut disks_vec = Vec::new();
+        for disk in disks_guard.0.list() {
+            let mount = disk.mount_point().to_string_lossy().to_string();
+            let total = disk.total_space();
+            let available = disk.available_space();
+            let used_pct = if total > 0 {
+                ((total.saturating_sub(available)) as f32 / total as f32) * 100.0
+            } else {
+                0.0
+            };
+            disks_vec.push(DiskInfo {
+                mount,
+                device: None,
+                total_bytes: total,
+                available_bytes: available,
+                used_percent: used_pct,
+            });
+        }
+        disks_vec
+    };
+
+    Ok(TelemetryData {
+        cpu,
+        ram,
+        net_rx: 0,
+        net_tx: 0,
+        ping_ms: None,
+        disks,
     })
 }
 
@@ -2659,12 +2863,16 @@ pub fn run() {
 
     let app_state = AppState {
         pty_sessions: Arc::new(Mutex::new(HashMap::new())),
+        pending_resizes: Arc::new(Mutex::new(HashMap::new())),
         config_path: config_path.clone(),
         ssh_pool: ssh::SshSessionPool::new(),
         docker_cpu_samples: Arc::new(Mutex::new(HashMap::new())),
         active_tunnels: Arc::new(Mutex::new(HashMap::new())),
         mesh: Arc::new(mesh_state.clone()),
         mcp_handle: Arc::new(Mutex::new(None)),
+        local_system: Arc::new(Mutex::new(sysinfo::System::new())),
+        local_disks: Arc::new(Mutex::new((sysinfo::Disks::new_with_refreshed_list(), std::time::Instant::now()))),
+        remote_disks_cache: Arc::new(Mutex::new(HashMap::new())),
     };
 
     if initial_cfg.settings.enable_mcp_server {
@@ -2688,6 +2896,7 @@ pub fn run() {
         .manage(mesh_state)
         .invoke_handler(tauri::generate_handler![
             get_remote_telemetry,
+            get_local_telemetry,
             read_local_file,
             write_local_file,
             list_local_files,
