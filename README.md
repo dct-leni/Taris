@@ -1,5 +1,8 @@
 # ⚡ Taris
 
+<img width="1391" height="869" alt="image" src="https://github.com/user-attachments/assets/40d51c18-dd8e-4fb9-b374-f7871394cdb4" />
+
+
 > **A blazing-fast, 100% portable, cross-platform SSH & Homelab Studio built on Tauri v2 (Rust Backend + Hardware-Accelerated Frontend)** — featuring pure async in-process SSH/SFTP (`russh`), mobile shell protocol (`mosh`), in-band ZMODEM terminal transfers, dual-mode SFTP file explorer with in-place archive browsing, in-app code editor & SQLite database viewer, remote Docker manager, native WSL & Linux virtual machine manager, real-time socket inspector, cloud provider discovery (GCP, AWS, Azure), and built-in mesh VPN tunnels (WireGuard, Tailscale, NetBird).
 
 ---
